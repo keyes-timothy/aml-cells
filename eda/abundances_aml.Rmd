@@ -1,0 +1,162 @@
+---
+title: Abundances EDA
+author: 
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+library(tidyverse)
+library(rlang)
+
+# Parameters
+
+data_path <- file.path("~", "Box", "Tim", "Lab", "SL_root_simulation", "home", "groups", "kardavis", "Tim", "results", "data", "AML_matrix_clustered.RData")
+cluster_column <- "Mah.cluster"
+plot_out_path <- file.path("~", "Desktop", "new_plots")
+
+metadata <- c("patient", "condition")
+
+CLASSIFIER_POPULATIONS <- 
+  c(
+    'HSC',
+    'MPP',
+    'CMP',
+    'GMP',
+    'MEP',                          
+    'Monocyte', 
+    'DC', 
+    'Macrophage', 
+    'Thrombocyte'
+  )
+
+#===============================================================================
+
+```
+
+## Read in data
+
+```{r}
+load(data_path)
+clustered_data <- expression.matrix
+rm(expression.matrix)
+
+recode_vars <- 
+  tibble(
+    from = 1:length(CLASSIFIER_POPULATIONS), 
+    to = CLASSIFIER_POPULATIONS
+  ) %>% 
+  deframe()
+
+clustered_data <- 
+  clustered_data %>% 
+  mutate(
+    Mah.cluster = recode(Mah.cluster, !!! recode_vars)
+  )
+
+glimpse(clustered_data)
+```
+
+## Wrangle data
+
+```{r}
+sample_size <- 
+  clustered_data %>% 
+  group_by(condition) %>% 
+  summarize(group_size = n_distinct(patient))
+
+abundances <- 
+  clustered_data %>% 
+  group_by_at(vars(one_of(metadata, cluster_column))) %>% 
+  summarize(cell_count = n()) %>% 
+  mutate(cell_prop = cell_count / sum(cell_count)) %>% 
+  left_join(sample_size, by = "condition") %>% 
+  group_by(condition, Mah.cluster) %>% 
+  summarize(
+    group_size = mean(group_size), 
+    sem = sd(cell_prop) / sqrt(group_size), 
+    cell_prop = mean(cell_prop), 
+  )
+
+abundances
+```
+
+## Abundance plots
+
+```{r}
+abundances %>% 
+  mutate(
+    Mah.cluster = 
+      factor(Mah.cluster, levels = CLASSIFIER_POPULATIONS)
+  ) %>% 
+  ggplot(aes(x = Mah.cluster, y = cell_prop, color = condition)) + 
+  geom_line(aes(group = condition)) + 
+  geom_crossbar(
+    aes(ymin = cell_prop - sem, ymax = cell_prop + sem, fill = condition), 
+    alpha = 0.3, 
+    color = NA
+  ) + 
+  geom_point(shape = 21, fill = "white", size = 3) + 
+  scale_y_continuous(
+    breaks = scales::breaks_width(width = 0.1), 
+    labels = scales::label_percent(accuracy = 1)
+  ) + 
+  geom_text(
+    aes(x = Mah.cluster, y = cell_prop + 0.1), 
+    data = 
+      abundances %>% 
+      dplyr::filter(
+        Mah.cluster %in% c("MPP", "GMP", "MEP"), 
+        condition == "Rx"
+      ), 
+    label = "\n↓", 
+    color = "black", 
+    size = 6
+  ) +
+  scale_color_discrete(
+    breaks = c("Healthy", "Dx", "Rx"), 
+    labels = c("Healthy", "Diagnosis", "Relapse")
+  ) + 
+  scale_fill_discrete(
+    breaks = c("Healthy", "Dx", "Rx"), 
+    labels = c("Healthy", "Diagnosis", "Relapse")
+  ) + 
+  theme_light() + 
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), 
+    legend.position = c(0.07, 0.9), 
+    legend.background = element_blank()
+  ) + 
+  labs(
+    x = NULL, 
+    y = "Cells in population (%)", 
+    fill = NULL, 
+    color = NULL, 
+    subtitle = 
+      "Dots indicate mean across all observations; Crossbars indicate 1 SEM"
+  )
+
+```
+
+Interpretation - 
+
+From the above plot, we can see that there are several cell subpopulations in which cancer cells are "expanded" relative to their healthy developmental counterparts. Populations of interest are indicated with arrows. 
+
+Specifically, Diagnostic and Relapse samples seem to be expanded in several primitive myeloid populations, including `MPPs`, `GMPs`, and `MEPs`. Interestingly, there seems to be more of a difference in the representation of `GMPs` and `MEPs` between diagnostic and relapse samples, whereas `MPPs` seem relatively consistent across both time points. `CMPs` have a slight trend for being increased in Diagnostic samples relative to relapse samples, but null-hypothesis significance testing will probably not show this as significant (based on the SEMs). 
+
+Whether or not these trends hold true for individual patients can be elucidated with individual plots of each patient's trajectory.
+
+`MPPs`, `GMPs`, and `MEPs` all give rise to vastly different branches of the myeloid developmental lineage - a lineage that is highly differentiable based not only on its marker profile, but also on the specific morphological characteristics that myeloid cell types can take. Thus, collecting morphological data on these cell types may be an interesting way to characterize a great deal more of their biology, such as in [this paper just published in Nature Medicine](https://www.nature.com/articles/s41591-020-0783-x). 
+
+
+
+
+
+
