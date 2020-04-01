@@ -5,9 +5,24 @@
 # Session Data files
 .RData
 
-# Data files in general
-.rds
-.RDS
+# Data files
+*.csv
+*.dta
+*.gz
+*.por
+*.rda
+*.rds
+*.sas
+*.sav
+*.stata
+*.tsv
+*.txt
+*.xpt
+.Rproj.user
+
+# Data folders
+data/
+data-raw/
 
 # User-specific files
 .Ruserdata
