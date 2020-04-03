@@ -1,0 +1,91 @@
+---
+title: "Diagnosis vs. Relapse Expression Analysis"
+author: "Timothy Keyes"
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+library(tidyverse)
+
+# Parameters
+input_path <- here::here("data", "AML_matrix_clustered_sampled.rds")
+
+CLASSIFIER_POPULATIONS <- 
+  c(
+    'HSC',
+    'MPP',
+    'CMP',
+    'GMP',
+    'MEP',                          
+    'Monocyte', 
+    'DC', 
+    'Macrophage', 
+    'Thrombocyte'
+  )
+
+#===============================================================================
+
+#source necessary files
+source('~/GitHub/aml-cells/scripts/setup/marker_setup.R')
+source('~/GitHub/aml-cells/scripts/setup/patient_setup.R')
+
+```
+
+## Basic setup
+
+Algorithm (in words): 
+
+* Read in previously pre-processed data
+  * arcsinh transform
+  * compensation
+  * filtered on `time` variable to remove weird CD34/CD38 "debarcode-gate"
+* filter to only include paired samples (with both `Dx` and `Rx` present as well as healthy controls)
+
+```{r}
+#### set up global varibles
+marker_setup()
+patient_setup()
+
+recode_vars <- 
+  tibble(
+    from = 1:length(CLASSIFIER_POPULATIONS), 
+    to = CLASSIFIER_POPULATIONS
+  ) %>% 
+  deframe()
+
+#read in paired data (and healthy data) 
+aml_data <- 
+  input_path %>% 
+  read_rds() %>%
+  mutate(
+    patient = 
+      patient %>% 
+      as.character() %>% 
+      str_to_lower() %>% 
+      if_else(. == "pastrp", "pasrtp", .), 
+    Mah.cluster = 
+      recode(Mah.cluster, !!! recode_vars) %>% 
+      factor(levels = CLASSIFIER_POPULATIONS)
+  ) %>% 
+  mutate_at(
+    .vars = vars(phenograph.metacluster, FlowSOM.cluster, FlowSOM.metacluster),
+    ~ (.) %>% 
+      as.character() %>% 
+      fct_reorder(., CD34, .fun = mean, .desc = TRUE)
+  ) %>% 
+  filter(patient %in% c(PAIRED_PATIENTS, HEALTHY_CONTROLS)) %>% 
+  rename_at(
+    vars(everything()), 
+    ~ (.) %>% 
+      str_to_lower() %>% 
+      str_replace_all(pattern = "[:punct:]", replacement = "_")
+  )
+```

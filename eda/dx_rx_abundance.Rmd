@@ -1,0 +1,315 @@
+---
+title: "Diagnosis vs. Relapse Abundance Analysis"
+author: "Timothy Keyes"
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, dpi = 300)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+library(tidyverse)
+
+# Parameters
+input_path <- here::here("data", "AML_matrix_clustered.rds")
+
+CLASSIFIER_POPULATIONS <- 
+  c(
+    'HSC',
+    'MPP',
+    'CMP',
+    'GMP',
+    'MEP',                          
+    'Monocyte', 
+    'DC', 
+    'Macrophage', 
+    'Thrombocyte'
+  )
+
+#===============================================================================
+
+#source necessary files
+source('~/GitHub/aml-cells/scripts/setup/marker_setup.R')
+source('~/GitHub/aml-cells/scripts/setup/patient_setup.R')
+
+```
+
+## Basic setup
+
+Algorithm (in words): 
+
+* Read in previously pre-processed data
+  * arcsinh transform
+  * compensation
+  * filtered on `time` variable to remove weird CD34/CD38 "debarcode-gate"
+* filter to only include paired samples (with both `Dx` and `Rx` present as well as healthy controls)
+
+```{r}
+#### set up global varibles
+marker_setup()
+patient_setup()
+
+recode_vars <- 
+  tibble(
+    from = 1:length(CLASSIFIER_POPULATIONS), 
+    to = CLASSIFIER_POPULATIONS
+  ) %>% 
+  deframe()
+
+#read in paired data (and healthy data) 
+aml_data <- 
+  input_path %>% 
+  read_rds() %>%
+  mutate(
+    patient = 
+      patient %>% 
+      as.character() %>% 
+      str_to_lower() %>% 
+      if_else(. == "pastrp", "pasrtp", .), 
+    Mah.cluster = 
+      recode(Mah.cluster, !!! recode_vars) %>% 
+      factor(levels = CLASSIFIER_POPULATIONS)
+  ) %>% 
+  mutate_at(
+    .vars = vars(phenograph.metacluster, FlowSOM.metacluster, kmeans.cluster),
+    ~ (.) %>% 
+      as.character() %>% 
+      fct_reorder(., CD34, .fun = mean, .desc = TRUE)
+  ) %>% 
+  filter(patient %in% c(PAIRED_PATIENTS, HEALTHY_CONTROLS)) %>% 
+  rename_at(
+    vars(everything()), 
+    ~ (.) %>% 
+      str_to_lower() %>% 
+      str_replace_all(pattern = "[:punct:]", replacement = "_")
+  )
+```
+
+## Differential abundance visualization
+
+```{r, echo = FALSE}
+### function to make plots
+cluster_plot <- function(cluster_column) { 
+  
+  sample_size <- 
+    aml_data %>% 
+    group_by(condition) %>% 
+    summarize(group_size = n_distinct(patient))
+  
+  abundances <- 
+    aml_data %>% 
+    group_by_at(vars(one_of("patient", "condition", cluster_column))) %>%
+    summarize(cell_count = n()) %>% 
+    mutate(cell_prop = cell_count / sum(cell_count)) %>% 
+    left_join(sample_size, by = "condition") %>% 
+    group_by_at(vars(one_of("condition", cluster_column))) %>% 
+    summarize(
+      group_size = mean(group_size), 
+      sem = sd(cell_prop) / sqrt(group_size), 
+      cell_prop = mean(cell_prop), 
+    )
+
+  ### Make plots 
+  plot <- 
+    abundances %>% 
+    ggplot(aes(x = !! sym(cluster_column), y = cell_prop, color = condition)) + 
+    geom_line(aes(group = condition)) + 
+    geom_crossbar(
+      aes(ymin = cell_prop - sem, ymax = cell_prop + sem, fill = condition), 
+      alpha = 0.3, 
+      color = NA
+    ) +
+    geom_point(shape = 21, fill = "white", size = 3) + 
+    scale_y_continuous(
+      breaks = scales::breaks_width(width = 0.1), 
+      labels = scales::label_percent(accuracy = 1)
+    ) +
+    scale_color_discrete(
+      breaks = c("Healthy", "Dx", "Rx"), 
+      labels = c("Healthy", "Diagnosis", "Relapse")
+    ) + 
+    scale_fill_discrete(
+      breaks = c("Healthy", "Dx", "Rx"), 
+      labels = c("Healthy", "Diagnosis", "Relapse")
+    ) + 
+    theme_light() + 
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), 
+      legend.position = c(0.07, 0.9), 
+      legend.background = element_blank()
+    ) + 
+    labs(
+      x = NULL, 
+      y = "Cells in population (%)", 
+      fill = NULL, 
+      color = NULL, 
+      subtitle = 
+        "Dots indicate mean across all observations; Crossbars indicate 1 SEM"
+    )
+  
+  plot
+}
+```
+
+### Classifier populations
+
+**In aggregate:**
+
+Algorithm (in words): 
+
+* For each patient and diagnostic condition (i.e. "Healthy", "Diagnosis", and "Relapse"), find the abundance of each classifier population (calculated using these markers): 
+
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+tibble(marker = CLASSIFIER.MARKERS) %>% 
+  knitr::kable()
+```
+
+* Find the mean and standard error of the mean for each population in each condition (across all patients) 
+* Plot
+
+```{r, echo = FALSE}
+cluster_plot("mah_cluster") 
+```
+
+From this plot, as discussed before, we can see that primitive populations (including HSC, MPP, CMP GMP, and MEP) are expanded in the cancer samples relative to healthy patients. However, there don't seem to be many populations that are very different between diagnostic and relapse samples at least in aggregate. However, we can take a closer look by doing a patient-specific analysis...
+
+**Patient by patient:**
+
+Algorithm (in words): 
+
+* First step 
+
+* Second step 
+
+* Third step
+
+```{r, echo = FALSE}
+##write function to make plots 
+patient_plot <- function(cluster_column) {
+  
+  abundances <- 
+    aml_data %>% 
+    group_by_at(vars(one_of("patient", "condition", cluster_column))) %>%
+    summarize(cell_count = n()) %>% 
+    mutate(cell_prop = cell_count / sum(cell_count))
+  
+  plot <- 
+    abundances %>% 
+    ggplot(aes(x = !! sym(cluster_column), y = cell_prop, color = condition)) + 
+    geom_line(aes(group = str_c(patient, condition))) +
+    geom_point(size = 2) + 
+    scale_y_continuous(
+      breaks = scales::breaks_width(width = 0.1), 
+      labels = scales::label_percent(accuracy = 1)
+    ) +
+    scale_color_discrete(
+      breaks = c("Healthy", "Dx", "Rx"), 
+      labels = c("Healthy", "Diagnosis", "Relapse")
+    ) + 
+    scale_fill_discrete(
+      breaks = c("Healthy", "Dx", "Rx"), 
+      labels = c("Healthy", "Diagnosis", "Relapse")
+    ) + 
+    facet_wrap(facets = vars(patient), ncol = 4) + 
+    theme_light() + 
+    theme(
+      axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5), 
+      legend.position = "right", 
+      legend.background = element_blank()
+    ) + 
+    labs(
+      x = NULL, 
+      y = "Cells in population (%)", 
+      fill = NULL, 
+      color = NULL, 
+      subtitle = 
+        "Dots indicate overall abundance in each patient and diagnostic condition."
+    )
+  
+  plot
+}
+```
+
+```{r, fig.width = 15, fig.height = 10}
+patient_plot("mah_cluster")
+```
+
+
+### Phenograph populations
+
+**In aggregate:**
+
+Algorithm (in words): 
+
+* For each patient and diagnostic condition (i.e. "Healthy", "Diagnosis", and "Relapse"), find the abundance of each phenograph population (calculated using all surface markers, as done in the original Phenograph paper).
+
+* Find the mean and standard error of the mean for each population in each condition (across all patients).
+
+* Order the populations by mean `CD34` expression (used as a marker of immaturity in the original Phenograph paper)
+
+* Plot
+
+```{r}
+cluster_plot("phenograph_metacluster") + 
+    labs(x = "Higher CD34 expression →")
+```
+
+From this plot, we can see that most phenograph clusters don't have SEM error bars, indicating that they are only present in 1 patient in a given diagnostic condition. For that reason, PhenoGraph clustering may need to be run with alternative parameters if patient-to-patient comparisons are to be made. 
+
+**Patient-by-patient:**
+
+```{r, fig.width = 20, fig.height = 10}
+patient_plot("phenograph_metacluster") + 
+  labs(x = "Higher CD34 expression →")
+
+```
+
+### FlowSOM populations
+
+**In aggregate:**
+
+Algorithm (in words): 
+
+* For each patient and diagnostic condition (i.e. "Healthy", "Diagnosis", and "Relapse"), find the abundance of each FlowSOM population (calculated using all surface markers).
+
+* Find the mean and standard error of the mean for each population in each condition (across all patients).
+
+* Order the populations by mean `CD34` expression (used as a marker of immaturity in the original Phenograph paper)
+
+* Plot
+
+```{r}
+cluster_plot("flowsom_metacluster") + 
+  theme(legend.position = c(0.92, 0.9)) + 
+  labs(x = "Higher CD34 expression →")
+```
+
+**Patient-by-patient:**
+
+```{r, fig.width = 15, fig.height = 10}
+patient_plot("flowsom_metacluster") + 
+  labs(x = "Higher CD34 expression →")
+
+```
+
+### K-means populations
+
+```{r, fig.width = 15}
+cluster_plot("kmeans_cluster") + 
+  theme(legend.position = c(0.92, 0.9)) + 
+  labs(x = "Higher CD34 expression →")
+```
+
+**Patient-by-patient:**
+
+```{r, fig.height = 20, fig.width = 15}
+patient_plot("kmeans_cluster") + 
+  facet_wrap(facets = vars(patient), ncol = 1) + 
+  labs(x = "Higher CD34 expression →")
+
+```
