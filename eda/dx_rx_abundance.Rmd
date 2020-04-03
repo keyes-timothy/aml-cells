@@ -180,14 +180,6 @@ From this plot, as discussed before, we can see that primitive populations (incl
 
 **Patient by patient:**
 
-Algorithm (in words): 
-
-* First step 
-
-* Second step 
-
-* Third step
-
 ```{r, echo = FALSE}
 ##write function to make plots 
 patient_plot <- function(cluster_column) {

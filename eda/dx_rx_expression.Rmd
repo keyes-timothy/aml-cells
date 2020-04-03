@@ -89,3 +89,21 @@ aml_data <-
       str_replace_all(pattern = "[:punct:]", replacement = "_")
   )
 ```
+
+## Cluster to cluster across patients
+
+```{r}
+cluster_column <- "mah_cluster"
+marker <- "cd45"
+
+cluster_type <- levels(aml_data$mah_cluster)[[1]]
+
+aml_data %>% 
+  filter(!! sym(cluster_column) %in% cluster_type) %>% 
+  mutate(patient = fct_reorder(patient, !! sym(marker), median)) %>% 
+  ggplot(aes(x = patient, y = !! sym(marker), fill = condition)) + 
+  geom_violin(draw_quantiles = 0.5) + 
+  labs(title = )
+  
+```
+

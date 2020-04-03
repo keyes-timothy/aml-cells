@@ -136,16 +136,6 @@ look by doing a patient-specific analysis…
 
 **Patient by patient:**
 
-Algorithm (in words):
-
-  - First step
-
-  - Second step
-
-  - Third step
-
-<!-- end list -->
-
 ``` r
 patient_plot("mah_cluster")
 ```
