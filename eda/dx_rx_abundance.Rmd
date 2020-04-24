@@ -79,7 +79,7 @@ aml_data <-
     .vars = vars(phenograph.metacluster, FlowSOM.metacluster, kmeans.cluster),
     ~ (.) %>% 
       as.character() %>% 
-      fct_reorder(., CD34, .fun = mean, .desc = TRUE)
+      fct_reorder(., CD34, .fun = mean, .desc = FALSE)
   ) %>% 
   filter(patient %in% c(PAIRED_PATIENTS, HEALTHY_CONTROLS)) %>% 
   rename_at(
@@ -248,7 +248,7 @@ Algorithm (in words):
 
 ```{r}
 cluster_plot("phenograph_metacluster") + 
-    labs(x = "Higher CD34 expression →")
+    labs(x = "Decreasing CD34 expression →")
 ```
 
 From this plot, we can see that most phenograph clusters don't have SEM error bars, indicating that they are only present in 1 patient in a given diagnostic condition. For that reason, PhenoGraph clustering may need to be run with alternative parameters if patient-to-patient comparisons are to be made. 
@@ -257,7 +257,7 @@ From this plot, we can see that most phenograph clusters don't have SEM error ba
 
 ```{r, fig.width = 20, fig.height = 10}
 patient_plot("phenograph_metacluster") + 
-  labs(x = "Higher CD34 expression →")
+  labs(x = "Decreasing CD34 expression →")
 
 ```
 
@@ -278,14 +278,14 @@ Algorithm (in words):
 ```{r}
 cluster_plot("flowsom_metacluster") + 
   theme(legend.position = c(0.92, 0.9)) + 
-  labs(x = "Higher CD34 expression →")
+  labs(x = "Decreasing CD34 expression →")
 ```
 
 **Patient-by-patient:**
 
 ```{r, fig.width = 15, fig.height = 10}
 patient_plot("flowsom_metacluster") + 
-  labs(x = "Higher CD34 expression →")
+  labs(x = "Decreasing CD34 expression →")
 
 ```
 
@@ -294,7 +294,7 @@ patient_plot("flowsom_metacluster") +
 ```{r, fig.width = 15}
 cluster_plot("kmeans_cluster") + 
   theme(legend.position = c(0.92, 0.9)) + 
-  labs(x = "Higher CD34 expression →")
+  labs(x = "Decreasing CD34 expression →")
 ```
 
 **Patient-by-patient:**

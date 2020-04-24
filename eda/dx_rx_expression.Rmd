@@ -16,7 +16,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 
 # Parameters
-input_path <- here::here("data", "AML_matrix_clustered_sampled.rds")
+input_path <- here::here("data", "AML_matrix_clustered.rds")
 
 CLASSIFIER_POPULATIONS <- 
   c(
@@ -96,14 +96,108 @@ aml_data <-
 cluster_column <- "mah_cluster"
 marker <- "cd45"
 
-cluster_type <- levels(aml_data$mah_cluster)[[1]]
-
-aml_data %>% 
-  filter(!! sym(cluster_column) %in% cluster_type) %>% 
-  mutate(patient = fct_reorder(patient, !! sym(marker), median)) %>% 
-  ggplot(aes(x = patient, y = !! sym(marker), fill = condition)) + 
-  geom_violin(draw_quantiles = 0.5) + 
-  labs(title = )
+clusters_across_patients <- function(cluster_column, marker) {
   
+  map(
+    levels(aml_data[[cluster_column]]), 
+    function(cluster_type) {
+      patient_levels <- 
+        aml_data %>% 
+        filter(!! sym(cluster_column) == cluster_type) %>% 
+        group_by(
+          metacondition = if_else(condition == "Healthy", "Healthy", "Cancer"),
+          patient
+        ) %>% 
+        summarize(median = median(!! sym(marker))) %>% 
+        ungroup() %>% 
+        arrange(metacondition, median) %>% 
+        pull(patient)
+      
+      aml_data %>% 
+        filter(!! sym(cluster_column) %in% cluster_type) %>% 
+        mutate(
+          metacondition = 
+            if_else(condition == "Healthy", "Healthy", "Cancer") %>% 
+            as.factor(), 
+          patient = factor(patient, levels = patient_levels)
+        ) %>% 
+        ggplot(aes(x = patient, y = !! sym(marker), fill = condition)) + 
+        geom_violin(draw_quantiles = 0.5) + 
+        labs(
+          title = 
+            str_c(
+              str_to_upper(marker), 
+              " expression in ", 
+              cluster_type, 
+              " cells across patients"
+            ), 
+          fill = NULL
+        )
+    }
+  )
+}
 ```
 
+
+### CD45
+```{r, fig.width = 15}
+cd45_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd45")
+
+cd45_mah_cluster_plots %>% 
+  walk(print)
+```
+
+-----------------------
+
+### CD34
+
+```{r, fig.width = 15}
+cd34_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd34")
+
+cd34_mah_cluster_plots %>% 
+  walk(print)
+```
+
+-----------------------
+
+### CD38 
+
+```{r, fig.width = 15}
+cd38_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd38")
+
+cd38_mah_cluster_plots %>% 
+  walk(print)
+```
+
+-----------------------
+
+### CD90 
+
+```{r, fig.width = 15}
+cd90_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd90")
+
+cd90_mah_cluster_plots %>% 
+  walk(print)
+```
+
+-----------------------
+
+### CD93
+
+```{r, fig.width = 15}
+cd93_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd93")
+
+cd93_mah_cluster_plots %>% 
+  walk(print)
+```
+
+-----------------------
+
+### CD99 
+
+```{r, fig.width = 15}
+cd99_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd99")
+
+cd99_mah_cluster_plots %>% 
+  walk(print)
+```

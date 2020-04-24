@@ -82,7 +82,7 @@ aml_data <-
     .vars = vars(phenograph.metacluster, FlowSOM.metacluster, kmeans.cluster),
     ~ (.) %>% 
       as.character() %>% 
-      fct_reorder(., CD34, .fun = mean, .desc = TRUE)
+      fct_reorder(., CD34, .fun = mean, .desc = FALSE)
   ) %>% 
   filter(patient %in% c(PAIRED_PATIENTS, HEALTHY_CONTROLS)) %>% 
   rename_at(
@@ -165,7 +165,7 @@ Algorithm (in words):
 
 ``` r
 cluster_plot("phenograph_metacluster") + 
-    labs(x = "Higher CD34 expression →")
+    labs(x = "Decreasing CD34 expression →")
 ```
 
 ![](dx_rx_abundance_files/figure-gfm/unnamed-chunk-8-1.png)<!-- -->
@@ -180,7 +180,7 @@ comparisons are to be made.
 
 ``` r
 patient_plot("phenograph_metacluster") + 
-  labs(x = "Higher CD34 expression →")
+  labs(x = "Decreasing CD34 expression →")
 ```
 
 ![](dx_rx_abundance_files/figure-gfm/unnamed-chunk-9-1.png)<!-- -->
@@ -208,7 +208,7 @@ Algorithm (in words):
 ``` r
 cluster_plot("flowsom_metacluster") + 
   theme(legend.position = c(0.92, 0.9)) + 
-  labs(x = "Higher CD34 expression →")
+  labs(x = "Decreasing CD34 expression →")
 ```
 
 ![](dx_rx_abundance_files/figure-gfm/unnamed-chunk-10-1.png)<!-- -->
@@ -217,7 +217,7 @@ cluster_plot("flowsom_metacluster") +
 
 ``` r
 patient_plot("flowsom_metacluster") + 
-  labs(x = "Higher CD34 expression →")
+  labs(x = "Decreasing CD34 expression →")
 ```
 
 ![](dx_rx_abundance_files/figure-gfm/unnamed-chunk-11-1.png)<!-- -->
@@ -227,7 +227,7 @@ patient_plot("flowsom_metacluster") +
 ``` r
 cluster_plot("kmeans_cluster") + 
   theme(legend.position = c(0.92, 0.9)) + 
-  labs(x = "Higher CD34 expression →")
+  labs(x = "Decreasing CD34 expression →")
 ```
 
 ![](dx_rx_abundance_files/figure-gfm/unnamed-chunk-12-1.png)<!-- -->
