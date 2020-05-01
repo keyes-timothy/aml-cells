@@ -7,7 +7,7 @@ output:
     toc: true
 ---
 
-```{r setup, include=FALSE}
+```{r signaling_setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
@@ -226,7 +226,8 @@ Note that the emd value is **not** zero even though the differences in means is 
 
 ## Stimulation relative to basal in Dx and Rx pairs
 
-Some text
+Our simulated data indicate that the implementation of EMD that we're using passes some basic sanity checks. Now, we apply it to the AML dataset. 
+
 
 ```{r}
 stim_names <- 
@@ -338,7 +339,7 @@ Thus, we have calculated all of the EMD scores for each stimulation condition fo
 
 # Visualizing differences in signaling EMDs
 
-## Dimensionality Reduction: 
+## Dimensionality Reduction:
 
 We can take the EMDs obtained for each sample and stick them together as a vector - and these vectors can then be used for any dimensionality reduction algorithms we choose for visualization. Let's give a try to PCA first...
 
@@ -422,9 +423,10 @@ emd_tsne %>%
 
 In general, the same result seems to hold, although I'll note that this plot is very sensitive to perplexity and seed (because the number of observations is relatively small). 
 
+
+```{r, eval = FALSE, echo = FALSE}
 ## Heatmap: 
 
-```{r}
 my_heatmap <- 
   pheatmap(
   mat = 
@@ -454,8 +456,6 @@ my_heatmap
 ```
 
 ## Custom plots and histograms
-
-The heatmap above is a little tricky to interpret, and I have to spend some more time figuring out a color scheme and labeling scheme that works the best. 
 
 ```{r, out.width = "100%", warning = FALSE, message = FALSE}
 all_patients <- 
@@ -517,35 +517,5 @@ Future directions:
 * Perform statistical tests to determine how the paired samples differ in a more quantitative way
 
 
-# Weekly report (4/24/20)
 
-## Irons in the fire
-
-* Things I read this week: 
-  * Fundamentals of Deep Learning ([Shallow and Deep Neural Networks](http://cs230.stanford.edu/syllabus/)) (Stanford CS230)
-  * [SAUCIE](https://www.nature.com/articles/s41592-019-0576-7): A deep learning approach to batch correction, clustering, and normalization of single-cell data (and specifically CyTOF data)
-  * Advanced R: Memory and the garbage collector 
-  * [EMDomics](https://rdrr.io/bioc/EMDomics/man/EMDomics.html) package vignette
-  
-* Analyzing signaling differences between Diagnostic and Relapse paired samples using EMD. 
-
-* Classifying ALL clusters obtained via CITRUS on newly optimized classifier (collaboration with Jolanda)
-
-* Visualizing marker distributions before and after mean-shift normalization (collaboration with Ben)
-
-* Deciding which predictive models to run on the AML dataset (and what features to engineer for the model)
-
-* Back-burner
-  * Developing functions for the `tidytof` package as they become relevant (i.e. more optimal .fcs file reader)
-  * Waiting for cytometry A review to be accepted or bounce back
-  * Reading about statistical tests for EMD and marker distributions on CyTOF data (any reason not just to use `SAM` workflow?)
-  * Set up google cloud for entire lab (lagging on this, blech)
-  
-## Burning questions: 
-
-* How can I improve my visualizations on surface marker expression and signaling marker expression that I have made so far? 
-
-* How can I communicate my analyses better to give the team a better sense of what I'm working on and what I have done? 
-
-* Is there anything I am missing right now that I should prioritize? 
   

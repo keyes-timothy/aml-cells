@@ -7,13 +7,14 @@ output:
     toc: true
 ---
 
-```{r setup, include=FALSE}
+```{r abundance_setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE, dpi = 300)
 ```
 
 ```{r message=FALSE, warning=FALSE}
 # Libraries
 library(tidyverse)
+#library(CATALYST)
 
 # Parameters
 input_path <- here::here("data", "AML_matrix_clustered.rds")
@@ -39,7 +40,7 @@ source('~/GitHub/aml-cells/scripts/setup/patient_setup.R')
 
 ```
 
-## Basic setup
+### Basic setup
 
 Algorithm (in words): 
 
@@ -90,7 +91,7 @@ aml_data <-
   )
 ```
 
-## Differential abundance visualization
+### Differential abundance visualization
 
 ```{r, echo = FALSE}
 ### function to make plots
@@ -156,7 +157,7 @@ cluster_plot <- function(cluster_column) {
 }
 ```
 
-### Classifier populations
+#### Classifier populations
 
 **In aggregate:**
 
@@ -231,8 +232,17 @@ patient_plot <- function(cluster_column) {
 patient_plot("mah_cluster")
 ```
 
+From these plots, a qualitative analysis might suggest that there are 3 main "types" of relationship between `diagnosis` and `relapse` timepoints: 
 
-### Phenograph populations
+  1) **Patients who don't seem to change much:** PARBIU, PATGIY, PATJSP, PARWXU, PATHIW
+  1) **Patients who shift from 1 main population to another:** PARZUU, PASXVC, PASBEE
+  1) **Patients with minor shifts (across multiple populations):** PASGWH, PASVZC, PASRTP, PATLHB
+  
+
+
+
+
+#### Phenograph populations
 
 **In aggregate:**
 
@@ -253,15 +263,18 @@ cluster_plot("phenograph_metacluster") +
 
 From this plot, we can see that most phenograph clusters don't have SEM error bars, indicating that they are only present in 1 patient in a given diagnostic condition. For that reason, PhenoGraph clustering may need to be run with alternative parameters if patient-to-patient comparisons are to be made. 
 
-**Patient-by-patient:**
+In addition, we can see that there isn't quite as much specificity for expansion in the "immature" compartment (i.e. the CD34-high compartment) compared to the classifier's immature populations. This is likely because CD34 expression is really a "poor man's" way to indicate immaturity, and a more rigorous way of expressing this idea would be to explicitly compute a pseudo-time axis of some kind. 
 
-```{r, fig.width = 20, fig.height = 10}
+
+```{r, fig.width = 20, fig.height = 10, eval = FALSE, echo = FALSE}
+# **Patient-by-patient:**
+
 patient_plot("phenograph_metacluster") + 
   labs(x = "Decreasing CD34 expression →")
 
 ```
 
-### FlowSOM populations
+#### FlowSOM populations
 
 **In aggregate:**
 
@@ -281,7 +294,14 @@ cluster_plot("flowsom_metacluster") +
   labs(x = "Decreasing CD34 expression →")
 ```
 
+Here, we can see similar results to that found in the classifier: several populations are expanded in the cancer samples relative to the healthy samples, with 2 of them (8 and 1) reduced in the cancer samples relative to the healthy samples overall. 
+
+Note that a simliar issue w.r.t. using `CD34` expression as a maturity marker is seen as above. 
+
 **Patient-by-patient:**
+
+When we look at similar plots on a patient-by-patient basis, we can see that the same kinds of patterns between `diagnosis` and `relapse` time points within a single patients are observed using FlowSOM clustering as were observed using the classifier populations. 
+
 
 ```{r, fig.width = 15, fig.height = 10}
 patient_plot("flowsom_metacluster") + 
@@ -289,19 +309,21 @@ patient_plot("flowsom_metacluster") +
 
 ```
 
-### K-means populations
+Once again, our qualitative analysis might suggest that there are 3 main "types" of relationship between `diagnosis` and `relapse` timepoints: 
 
-```{r, fig.width = 15}
-cluster_plot("kmeans_cluster") + 
-  theme(legend.position = c(0.92, 0.9)) + 
-  labs(x = "Decreasing CD34 expression →")
-```
+  2) **Patients who don't seem to change much:** PARBIU, PATGIY, PATJSP, PARWXU, PATHIW
+  2) **Patients who shift from 1 main population to another:** PARZUU, PASXVC, PASBEE
+  2) **Patients with minor shifts (across multiple populations):** PASGWH, PASVZC, PASRTP, PATLHB
+  
 
-**Patient-by-patient:**
+### Conclusions
 
-```{r, fig.height = 20, fig.width = 15}
-patient_plot("kmeans_cluster") + 
-  facet_wrap(facets = vars(patient), ncol = 1) + 
-  labs(x = "Higher CD34 expression →")
+* Abundances of different cell populations are likely to be informative features in a predictive model of relapse, as difference between patients (and between time points) suggest a role in relapse biology 
 
-```
+*  There is variability between patients (i.e. 3 types of patient) re: shifts in population abundance from diagnosis to relapse. This may indicate that a model that can take into account the relationships between populations may capture more relevant information than one that only considers them independently (the current gold standard).
+
+* Pseudo-time calculations among healthy and cancer cell populations may yield a relevant feature for modeling (interaction term, see point above) or may simply help with visualization. 
+
+* Statistics to evaluate the descriptive differences above would be nice. Currently, I am evaluating between the two main approaches that people use for single-cell data: 
+  * SAM-like permutation tests.
+  * Linear mixed models (i.e. `diffcyt` and `limma` packages). 

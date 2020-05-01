@@ -1,0 +1,79 @@
+---
+title: "5/1/2020 Davis Lab Meeting"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+Today, I will be presenting several analyses that are a part of the AML project's ramping up to create a predictive model of relapse. 
+
+
+## Background
+So far, I have focused my analyses on visualization and clustering, mainly to "try out" many existing analysis methods that have come out of the Davis and Nolan labs and applied to similar data to mine. These include the following: 
+
+* Visualization
+  * PCA
+  * tSNE
+  * UMAP
+  
+* Clustering
+  * FlowSOM 
+  * PhenoGraph
+  * Developmental Classifier
+  
+## Framework
+
+At this stage, it is clear that none of these methods alone tell a complete story re: my data, so I have moved on to the explicit `Feature Engineering and Selection` stages of building a predictive model. Here is a figure that summarizes some theory about exploratory data analysis and its relationship to building good, reliable models: 
+
+```{r, echo = FALSE, fig.cap="From Feature Engineering & Selection by Max Kuhn and Kjell Johnson"}
+knitr::include_graphics(path = "fes_process.png")
+```
+
+## Outline
+
+At this stage, I am somewhere between `b` and `c` and trying to figure out how I'd like to engineer the features that I include in my model. So far, I have focused on 3 kinds of features present in my data and am trying to understand their general structure: 
+
+* Population abundances
+* Cell surface marker expression
+* Signaling perturbation response
+
+I will present some EDA about each of these feature types today. 
+
+# Data and Interpretation
+
+## Population Abundances
+
+```{r, child = '/Users/tkeyes/GitHub/aml-cells/eda/dx_rx_abundance.Rmd'}
+```
+
+
+## Cell surface marker expression
+
+```{r, child = '/Users/tkeyes/GitHub/aml-cells/eda/dx_rx_expression.Rmd'}
+```
+
+## Signaling perturbation response
+
+```{r, child = '/Users/tkeyes/GitHub/aml-cells/eda/dx_rx_signaling.Rmd'}
+```
+
+# Recap / Take-home messages
+
+* Preliminary feature investigation supports the development of a model that operated on the single-cell level. 2 papers have done this so far for CyTOF data: 
+  * [This one](https://academic.oup.com/bioinformatics/article/35/7/1197/5088319) from Atul Butte's lab uses two linear models in a row: one on the single-cell level and then one on the patient-level (using the results of the single-cell model). 
+  * {This one](https://www.nature.com/articles/ncomms14825) from Manfred Claassen's lab (Zurich) that uses a convolutional neural network. Very cool. 
+  
+* Signaling information can be effectively represented on the patient-level (either in modeling or for visualization) as earth-movers distances. What exactly this information is best used for is something I'm trying to figure out. 
+
+* Biggest next-steps involve more EDA (across multiple categorical variables, i.e. patient/condition/cluster/stimulation) and development of a robust statistical testing pipeline for any differences that are observed (i.e. Tim has to develop a favorite methodolody for doing this). 
+
+* For now, I am planning to build 2 kinds of models. 1 will operate at the patient level and will use engineered features. The other will be a neural network that automates the feature extraction process. 
+  
+  
+
+
+

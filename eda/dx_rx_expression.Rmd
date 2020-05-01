@@ -7,13 +7,14 @@ output:
     toc: true
 ---
 
-```{r setup, include=FALSE}
+```{r expression_setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r message=FALSE, warning=FALSE}
 # Libraries
 library(tidyverse)
+library(ggridges)
 
 # Parameters
 input_path <- here::here("data", "AML_matrix_clustered.rds")
@@ -81,7 +82,7 @@ aml_data <-
       as.character() %>% 
       fct_reorder(., CD34, .fun = mean, .desc = TRUE)
   ) %>% 
-  filter(patient %in% c(PAIRED_PATIENTS, HEALTHY_CONTROLS)) %>% 
+  dplyr::filter(patient %in% c(PAIRED_PATIENTS, HEALTHY_CONTROLS)) %>% 
   rename_at(
     vars(everything()), 
     ~ (.) %>% 
@@ -103,7 +104,7 @@ clusters_across_patients <- function(cluster_column, marker) {
     function(cluster_type) {
       patient_levels <- 
         aml_data %>% 
-        filter(!! sym(cluster_column) == cluster_type) %>% 
+        dplyr::filter(!! sym(cluster_column) == cluster_type) %>% 
         group_by(
           metacondition = if_else(condition == "Healthy", "Healthy", "Cancer"),
           patient
@@ -114,23 +115,27 @@ clusters_across_patients <- function(cluster_column, marker) {
         pull(patient)
       
       aml_data %>% 
-        filter(!! sym(cluster_column) %in% cluster_type) %>% 
+        dplyr::filter(!! sym(cluster_column) %in% cluster_type) %>% 
+        dplyr::filter(stimulation == "Basal") %>% 
         mutate(
           metacondition = 
             if_else(condition == "Healthy", "Healthy", "Cancer") %>% 
             as.factor(), 
           patient = factor(patient, levels = patient_levels)
         ) %>% 
-        ggplot(aes(x = patient, y = !! sym(marker), fill = condition)) + 
-        geom_violin(draw_quantiles = 0.5) + 
+        ggplot(aes(x = !! sym(marker), y = patient, fill = condition)) + 
+        geom_density_ridges(scale = 1, alpha = 0.6) + 
+        coord_cartesian(clip = "off") + 
+        theme_ridges() + 
         labs(
-          title = 
-            str_c(
-              str_to_upper(marker), 
-              " expression in ", 
-              cluster_type, 
-              " cells across patients"
-            ), 
+          title = str_c(
+            str_to_upper(marker), 
+            " expression in ", 
+            cluster_type, 
+            " cells across patients"
+          ), 
+          x = str_c(marker, " expression"), 
+          y = NULL,
           fill = NULL
         )
     }
@@ -140,7 +145,7 @@ clusters_across_patients <- function(cluster_column, marker) {
 
 
 ### CD45
-```{r, fig.width = 15}
+```{r, fig.height=12}
 cd45_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd45")
 
 cd45_mah_cluster_plots %>% 
@@ -151,7 +156,7 @@ cd45_mah_cluster_plots %>%
 
 ### CD34
 
-```{r, fig.width = 15}
+```{r, fig.height=12}
 cd34_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd34")
 
 cd34_mah_cluster_plots %>% 
@@ -162,7 +167,7 @@ cd34_mah_cluster_plots %>%
 
 ### CD38 
 
-```{r, fig.width = 15}
+```{r, fig.height=12}
 cd38_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd38")
 
 cd38_mah_cluster_plots %>% 
@@ -173,10 +178,10 @@ cd38_mah_cluster_plots %>%
 
 ### CD90 
 
-```{r, fig.width = 15}
+```{r, fig.height=12}
 cd90_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd90")
 
-cd90_mah_cluster_plots %>% 
+cd90_mah_cluster_plots[1:2] %>% 
   walk(print)
 ```
 
@@ -184,10 +189,10 @@ cd90_mah_cluster_plots %>%
 
 ### CD93
 
-```{r, fig.width = 15}
+```{r, fig.height=12}
 cd93_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd93")
 
-cd93_mah_cluster_plots %>% 
+cd93_mah_cluster_plots[1:2] %>% 
   walk(print)
 ```
 
@@ -195,9 +200,48 @@ cd93_mah_cluster_plots %>%
 
 ### CD99 
 
-```{r, fig.width = 15}
+```{r, fig.height=12}
 cd99_mah_cluster_plots <- clusters_across_patients("mah_cluster", "cd99")
 
-cd99_mah_cluster_plots %>% 
+cd99_mah_cluster_plots[1:2] %>% 
   walk(print)
 ```
+
+-----------------------
+
+### pSTAT5
+
+```{r, fig.height=12}
+pstat5_mah_cluster_plots <- clusters_across_patients("mah_cluster", "pstat5")
+
+pstat5_mah_cluster_plots[1:3] %>% 
+  walk(print)
+```
+
+-----------------------
+
+### pSTAT3 
+
+```{r, fig.height=12}
+pstat3_mah_cluster_plots <- clusters_across_patients("mah_cluster", "pstat3")
+
+pstat3_mah_cluster_plots[1:3] %>% 
+  walk(print)
+```
+
+----------------------
+
+
+#### Conclusions
+
+* Univariate analyses don't indicate any particular marker as "leaping out" as particularly higher or lower in relapse samples relative to healthy samples (to be expected)
+
+* Often, magnitudes and even directions of up- or down-regulation are not consistent between diagnostic-relapse pairs. 
+
+* Marker distributions within a patient and population seem to stay relatively constant for surface markers, but less so for functional markers (again, perhaps to be expected). So, our model should probably not extract the mean or median of the signaling distributions for fear of losing whatever differences are present.
+
+* Classifier population marker distributions can vary quite a bit from patient to patient. 
+
+* Some markers are not very highly expresssed at all. This is evidence that the panel can still be optimized (FYI: Astraea and I have already worked on this quite a bit for AML panel 2.0) 
+
+* Differences across the board are likely to be very nuanced. Perhaps patient-level features will not capture this: should the model operate on the single-cell level? 
