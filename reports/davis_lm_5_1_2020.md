@@ -771,7 +771,7 @@ In this analysis, we take a look at the difference in the Earth Mover’s
 Distance (Wasserstein Distance) between signaling parameters in our mass
 cytometry AML dataset.
 
-\#\#Background
+## Background
 
 Broadly speaking, the Earth Mover’s Distance (EMD) computes the “work”
 needed to transform one distribution into another. In molecular/systems
@@ -789,8 +789,6 @@ generally preferable to using the mean/median when the distributions
 you’re working with are irregularly shaped (for instance, highly
 skewed or multimodal, since mean and median are generally less
 informative in these kinds of distributions).
-
-\*\[Add some citations to this section\]
 
 Here, we will perform some EMD calculations and then manually
 investigate signaling distributions between relapse and diagnostic
@@ -890,9 +888,9 @@ calculate_emd_gene(
   knitr::kable()
 ```
 
-|    x |
-| ---: |
-| 1.46 |
+|   x |
+| --: |
+| 1.3 |
 
 We can also show that, if we translate population `B` gradually larger
 distances from population A, we will return higher EMD values (as
@@ -923,19 +921,19 @@ tibble(
   knitr::kable()
 ```
 
-| added\_value |   emd |
-| -----------: | ----: |
-|            0 |  1.46 |
-|            1 |  9.98 |
-|            2 | 19.98 |
-|            3 | 29.98 |
-|            4 | 39.98 |
-|            5 | 49.98 |
-|            6 | 59.98 |
-|            7 | 69.98 |
-|            8 | 79.98 |
-|            9 | 89.98 |
-|           10 | 99.98 |
+| added\_value |    emd |
+| -----------: | -----: |
+|            0 |   1.30 |
+|            1 |  10.66 |
+|            2 |  20.66 |
+|            3 |  30.66 |
+|            4 |  40.66 |
+|            5 |  50.66 |
+|            6 |  60.66 |
+|            7 |  70.66 |
+|            8 |  80.66 |
+|            9 |  90.66 |
+|           10 | 100.66 |
 
 And we can see that the more we add to the distribution for `B`, the
 higher the EMD we get (as expected).
@@ -994,9 +992,9 @@ sim_data %>%
 
 ![](davis_lm_5_1_2020_files/figure-gfm/unnamed-chunk-32-1.png)<!-- -->
 
-| emd | mean\_difference | median\_difference |
-| --: | ---------------: | -----------------: |
-| 7.3 |                0 |        \-0.0633103 |
+|  emd | mean\_difference | median\_difference |
+| ---: | ---------------: | -----------------: |
+| 9.32 |                0 |        \-0.2341422 |
 
 Note that the emd value is **not** zero even though the differences in
 means is 0 (and the median difference is very small), indicating that

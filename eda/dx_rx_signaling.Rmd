@@ -46,13 +46,11 @@ source('~/GitHub/aml-cells/scripts/setup/patient_setup.R')
 
 In this analysis, we take a look at the difference in the Earth Mover's Distance (Wasserstein Distance) between signaling parameters in our mass cytometry AML dataset. 
 
-##Background 
+## Background 
 
 Broadly speaking, the Earth Mover's Distance (EMD) computes the "work" needed to transform one distribution into another. In molecular/systems biology, EMD is often used to compare marker distributions between various conditions (diagnosis and relapse, treatment and not treatment, stimulation vs. not stimulation, etc.).  
 
 Unlike traditional methods of comparing measurements of central tendency (such as mean or median) between marker distributions in 1 or more conditions, EMD takes into account that distributions may shift in subtle ways: even if their means/medians do not change much, the distributions may change a great deal in terms of how they are shaped *outside* the areas of central tendency. For this reason, EMD is generally preferable to using the mean/median when the distributions you're working with are irregularly shaped (for instance, highly skewed or multimodal, since mean and median are generally less informative in these kinds of distributions). 
-
-*[Add some citations to this section]
 
 Here, we will perform some EMD calculations and then manually investigate signaling distributions between relapse and diagnostic samples in pediatric AML that has been stimulated in several conditions relative to baseline (`basal`): 
 
