@@ -1,0 +1,72 @@
+---
+title: AML project and data analysis pipeline report
+author: 
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE, include = FALSE}
+# Libraries
+library(tidyverse)
+
+# Parameters
+
+#===============================================================================
+
+# Code
+```
+
+# A systematic approach to CyTOF modeling
+
+## Reading data and metadata 
+
+A standardized analysis pipeline has to be able to read in data from a standard format
+and into a readily-useable data structure. 
+
+Associated tidyTOF functions:
+
+* `tof_read_fcs()` - to read in .fcs files in bulk (1.5x speed improvement over `{cytofkit}`)
+* `tof_clean_marker_names()` - format names initially assigned to each channel by the mass cytometer
+* `tof_read_metadata()` - read in a .csv or .xls file re: patient-level metadata for each sample
+
+## Homogenization of datasets 
+
+Associated tidyTOF functions: 
+
+* `ben_channel_homogenization()` - still under development
+
+## Data Pre-processing
+
+Tasks: 
+* Variance-stabilizing transformation (`tof_arcsinh()`)
+* "Normalization" of raw data
+  * Percentile normalization
+  * Quantile normalization
+  * Rank-order transformation
+  * MMD sample-to-sample normalization (SAUCIE and DeepCyTOF)
+  * Batch normalization (Ben)
+  * Others?
+
+## Feature engineering 
+
+* Patient-level matrix extraction
+  * `tof_extract_feature_matrix()`
+    * Statistical Scaffold/CITRUS
+    * DDPR 
+    * CytoDx
+  * Developmental embedding
+    * Neural-network-based (`word2vec`)
+    * Path-tracing algorithm (monocle, slingshot)
+* Single-cell level
+  * “Eigencells” across stimulation conditions using knn on surface markers 
+
+## Modeling
+
+* GLMs (`{tidymodels}`) 
+* Neural networks (`{keras}` and `{tensorflow}`)

@@ -73,7 +73,64 @@ I will present some EDA about each of these feature types today.
 
 * For now, I am planning to build 2 kinds of models. 1 will operate at the patient level and will use engineered features. The other will be a neural network that automates the feature extraction process. 
   
-  
+```{r}
+test_folder <- file.path("~", "Box", "Tim", "Lab", "Data", "AML_Data", "AML_Corrected_Myeloid_Classified")
+```
+
+```{r}
+library(tictoc)
+tic()
+cytofkit_tibble <- 
+  cytofkit::cytof_exprsMerge(
+    list.files(my_folder_2, full.names = TRUE), 
+    transformMethod = "none",  
+    mergeMethod = "all"
+  ) %>% 
+  as_tibble()
+toc()
+
+cytofkit_tibble
+```
 
 
+```{r}
+tic()
+my_tibble <- tof_read_fcs(folder_path = my_folder_2)
+toc()
+
+my_tibble
+```
+
+```{r}
+82/64 
+```
+
+
+```{r}
+tic()
+cytofkit_tibble <- 
+  cytofkit::cytof_exprsMerge(
+    list.files(test_folder, full.names = TRUE), 
+    transformMethod = "none",  
+    mergeMethod = "all"
+  ) %>% 
+  as_tibble()
+toc()
+
+cytofkit_tibble
+```
+
+
+```{r}
+tic()
+my_tibble <- tof_read_fcs(folder_path = test_folder)
+toc()
+
+my_tibble
+```
+
+```{r}
+#performance increase
+364/245 
+```
 
