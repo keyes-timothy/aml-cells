@@ -44,6 +44,7 @@ Associated tidyTOF functions:
 ## Data Pre-processing
 
 Tasks: 
+
 * Variance-stabilizing transformation (`tof_arcsinh()`)
 * "Normalization" of raw data
   * Percentile normalization
