@@ -29,5 +29,33 @@ call_libraries <- function(libraries) {
   }
 }
 
-#### Another function ####
+#### set_global_variables ####
+# Description: A function that sets all global variables for the aml project analysis. 
+#
+# Inputs: 
+#     - locale = string representing where the analysis is being run
+#
+# Outputs: None
+#
+# Side-effects: 
+#       Sets up global variables for the aml project analysis including the following: 
+#         - RAW_DATA_DIRECTORY = folder where raw .fcs files are located
+#         - DATA_DIRECTORY = folder where processed data files are located
+#         - READER_OUTPUT = folder where figures from the reader functions should be saved
+#         - 
+set_global_variables <- function(locale = NULL){ 
+  if (locale == "galaxia") { 
+    RAW_DATA_DIRECTORY <<- file.path("~", "Box", "Tim", "Lab", "Data", "AML_Data", "AML_Compensated_Corrected_Myeloid")
+    DATA_DIRECTORY <<- here::here("data")
+    
+    READER_OUTPUT <<- here::here("figures", "processing")
+    
+  } else if (locale == "sherlock") { 
+    NULL
+  } else { 
+    NULL
+  }
+}
+
+  
 

@@ -27,7 +27,7 @@ library(tidyverse)
 ## Reading data and metadata 
 
 A standardized analysis pipeline has to be able to read in data from a standard format
-and into a readily-useable data structure. 
+and into a readily-useable data structure.
 
 Associated tidyTOF functions:
 
@@ -35,15 +35,15 @@ Associated tidyTOF functions:
 * `tof_clean_marker_names()` - format names initially assigned to each channel by the mass cytometer
 * `tof_read_metadata()` - read in a .csv or .xls file re: patient-level metadata for each sample
 
-## Homogenization of datasets 
+## Homogenization of datasets
 
-Associated tidyTOF functions: 
+Associated tidyTOF functions:
 
 * `ben_channel_homogenization()` - still under development
 
 ## Data Pre-processing
 
-Tasks: 
+Tasks:
 
 * Variance-stabilizing transformation (`tof_arcsinh()`)
 * "Normalization" of raw data
