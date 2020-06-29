@@ -1,0 +1,345 @@
+---
+title: "Master AML Vignette"
+author: 
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r libraries-and-params, message=FALSE, warning=FALSE}
+# Libraries
+library(flowCore)
+library(tidyverse)
+library(readxl)
+library(ggridges)
+library(rlang)
+
+# Parameters
+source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
+set_global_variables(locale = "galaxia")
+
+tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
+is_sampled <- TRUE
+md_path <- here::here("data-raw", "AML_metadata.xlsx")
+
+# Sourcing tidyTOF functions
+source_tidyTOF(tidyTOF_directory)
+
+marker_setup()
+patient_setup()
+
+```
+
+## Read in metadata
+
+```{r read-metadata}
+md <- 
+  md_path %>% 
+  read_excel() %>% 
+  mutate(
+    Patient = Patient %>% str_to_lower()
+  ) %>% 
+  janitor::clean_names(case = "snake")
+```
+
+
+## Read in single-cell data
+
+### From scratch 
+
+```{r raw-read-single-cell, read-raw-data, eval = FALSE}
+source(file.path(CODE_DIRECTORY, "aml_read_data.R"))
+```
+
+### From .rds file
+
+```{r rds-read-single-cell}
+data_path <- 
+  file.path(
+    DATA_DIRECTORY, 
+    if_else(is_sampled, "raw_aml_tibble_sampled.rds", "raw_aml_tibble.rds")
+  )
+
+aml_data <- 
+  data_path %>% 
+  read_rds() %>% 
+  ungroup() %>% 
+  mutate(cell_id = as.character(1:n()))
+```
+
+
+### Compare metadata and single-cell data
+
+```{r compare-patient-names-pre}
+setdiff(md$patient, str_to_lower(aml_data$patient))
+
+setdiff(str_to_lower(aml_data$patient), md$patient)
+
+```
+
+Thus, we can see that several patients in the single-cell data set have to be renamed
+in order to match the metadata. 
+
+```{r fix-patient-names}
+aml_data <- 
+  aml_data %>% 
+  mutate(
+    patient = 
+      recode(patient, PASBEE = "pasbbe", PASTRP = "pasrtp") %>% 
+      str_to_lower(), 
+    plate = factor(plate, levels = str_c("plate", 1:16))
+  )
+```
+
+
+And now we check the names again... 
+```{r compare-patient-names-post}
+setdiff(md$patient, str_to_lower(aml_data$patient))
+setdiff(str_to_lower(aml_data$patient), md$patient)
+```
+
+And we can see that there are some patients that included in the metadata that we have no single-cell data
+for and that we have no metadata for the 4 healthy samples (the names that take the form `bm####`). 
+
+### Pre-process
+
+With arcsinh transformation and removal of added noise: 
+```{r preprocess-1}
+aml_data_p <- 
+  aml_data %>% 
+  tof_preprocess()
+```
+
+With arcsinh transformation and removal of added noise, plus scaling/centering: 
+
+```{r preprocess-2}
+ps_fun <- function(x) { 
+  x %>% 
+    {asinh(x = ./5)} %>% 
+    scale() %>% 
+    as.numeric()
+}
+
+aml_data_ps <- 
+  aml_data %>% 
+  tof_preprocess(transform_fun = ps_fun)
+```
+
+With removal of added noise and rank transformation (similar to "cytoDx"):
+```{r preprocess-3}
+aml_data_r <-
+  aml_data %>% 
+  tof_preprocess(transform_fun = rank)
+```
+
+Save pre-processed data
+
+```{r save-preprocessed-data}
+ls() %>% 
+  str_subset(pattern = "aml_data_.") %>% 
+  walk(
+    .f = ~ get(.x) %>% 
+      write_rds(
+        path = 
+          file.path(
+            DATA_DIRECTORY, 
+            str_c(if_else(is_sampled, "sampled_", ""), .x, ".rds")
+          )
+      )
+  )
+```
+
+
+## Data quality and univariate distributions
+
+### By plate
+
+#### Number of cells
+
+```{r cell-number-plate}
+aml_data %>% 
+  count(plate) %>% 
+  knitr::kable()
+```
+
+```{r cell-number-plate-density}
+aml_data %>% 
+  count(plate) %>% 
+  ggplot(aes(x = n)) + 
+  geom_density() + 
+  geom_point(aes(x = n, y = 0), size = 3, shape = "|") + 
+  scale_x_continuous(
+    labels = scales::label_number(accuracy = 1, scale = 1e-6, suffix = "M")
+  ) +
+  scale_y_continuous() + 
+  labs(
+    subtitle = "Number of cells on each CyTOF plate", 
+    caption = "Hash marks indicate individual plate values", 
+    x = "Number of cells", 
+    y = "Relative Density"
+  )
+```
+
+#### Univariate histograms
+
+
+Plot and save all histograms to a directory on your local machine. 
+```{r histograms-plate-plot}
+aml_data_p %>% 
+  tof_plot_all_histograms(
+    group_var = plate, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"),  
+    label_suffix = "hist_by_plate.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf"
+  )
+
+aml_data_p %>% 
+  filter(condition == "healthy") %>% 
+  tof_plot_all_histograms(
+    group_var = plate, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p_healthy"), 
+    label_suffix = "hist_by_plate.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf"
+  )
+
+aml_data_ps %>% 
+  tof_plot_all_histograms(
+    group_var = plate, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
+    label_suffix = "hist_by_plate.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf"
+  )
+
+aml_data_ps %>% 
+  filter(condition == "healthy") %>% 
+  tof_plot_all_histograms(
+    group_var = plate, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps_healthy"), 
+    label_suffix = "hist_by_plate.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf"
+  )
+
+```
+
+#### By plate (comparing patients on more than one plate)
+
+#### By patient
+
+```{r}
+aml_data_p %>% 
+  tof_histogram(channel_var = CD45, group_var = patient, ordered = TRUE)
+
+aml_data_p %>% 
+  tof_plot_all_histograms(
+    group_var = patient, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"), 
+    label_suffix = "hist_by_patient.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf",
+    ordered = TRUE
+  )
+
+
+aml_data_ps %>% 
+  tof_plot_all_histograms(
+    group_var = patient, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
+    label_suffix = "hist_by_patient.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf", 
+    ordered = TRUE
+  )
+
+```
+
+
+#### By patient (comparing patients with both Dx and Rx)
+
+#### By stimulation (surface)
+
+```{r}
+aml_data_p %>% 
+  tof_histogram(channel_var = CD45, group_var = stimulation, ordered = TRUE)
+
+aml_data_p %>% 
+  tof_plot_all_histograms(
+    group_var = stimulation, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"), 
+    label_suffix = "hist_by_stim.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf",
+    ordered = TRUE
+  )
+
+aml_data_p %>% 
+  filter(condition == "healthy") %>% 
+  tof_plot_all_histograms(
+    group_var = stimulation, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p_healthy"), 
+    label_suffix = "hist_by_stim.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf"
+  )
+
+aml_data_ps %>% 
+  tof_plot_all_histograms(
+    group_var = stimulation, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+    label_prefix =  str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
+    label_suffix = "hist_by_stim.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf", 
+    ordered = TRUE
+  )
+
+aml_data_ps %>% 
+  filter(condition == "healthy") %>% 
+  tof_plot_all_histograms(
+    group_var = stimulation, 
+    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+    label_prefix =  str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps_healthy"), 
+    label_suffix = "hist_by_stim.pdf", 
+    width = 6, 
+    height = 10,
+    device = "pdf"
+  )
+```
+
+
+
+#### By stimulation (signaling)
+
+
+## Classifier 
+
+```{r}
+
+```
+
+
