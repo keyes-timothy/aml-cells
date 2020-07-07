@@ -18,6 +18,9 @@ library(tidyverse)
 library(readxl)
 library(ggridges)
 library(rlang)
+library(ggthemes)
+library(DataExplorer)
+library(ComplexHeatmap)
 
 # Parameters
 source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
@@ -76,9 +79,20 @@ aml_data <-
 ### Compare metadata and single-cell data
 
 ```{r compare-patient-names-pre}
-setdiff(md$patient, str_to_lower(aml_data$patient))
+print(
+  str_glue(
+    "Patients in MD but not in single-cell data: \n {my_patients} \n",
+    my_patients = str_c(setdiff(md$patient,str_to_lower(aml_data$patient)), collapse = " ")
+  )
+)
 
-setdiff(str_to_lower(aml_data$patient), md$patient)
+
+print(
+  str_glue(
+    "Patients in single-cell data but not in MD: \n {my_patients} \n",
+    my_patients = str_c(setdiff(str_to_lower(aml_data$patient), md$patient), collapse = " "), 
+  )
+)
 
 ```
 
@@ -99,8 +113,20 @@ aml_data <-
 
 And now we check the names again... 
 ```{r compare-patient-names-post}
-setdiff(md$patient, str_to_lower(aml_data$patient))
-setdiff(str_to_lower(aml_data$patient), md$patient)
+print(
+  str_glue(
+    "Patients in MD but not in single-cell data: \n {my_patients} \n",
+    my_patients = str_c(setdiff(md$patient,str_to_lower(aml_data$patient)), collapse = " ")
+  )
+)
+
+
+print(
+  str_glue(
+    "Patients in single-cell data but not in MD: \n {my_patients} \n",
+    my_patients = str_c(setdiff(str_to_lower(aml_data$patient), md$patient), collapse = " "), 
+  )
+)
 ```
 
 And we can see that there are some patients that included in the metadata that we have no single-cell data
@@ -133,9 +159,10 @@ aml_data_ps <-
 With removal of added noise and rank transformation (similar to "cytoDx"):
 ```{r preprocess-3}
 aml_data_r <-
-  aml_data %>% 
+  aml_data %>%
   tof_preprocess(transform_fun = rank)
 ```
+
 
 Save pre-processed data
 
@@ -156,6 +183,103 @@ ls() %>%
 
 
 ## Data quality and univariate distributions
+
+### Introduction to the data
+
+First, we use the `{{DataExplorer}}` package to get to know the data a bit. 
+
+```{r}
+plot_str(aml_data)
+```
+
+```{r}
+introduce(aml_data) %>% 
+  pivot_longer(
+    cols = everything(), 
+    names_to = "dataset_feature", 
+    values_to = "value"
+  ) %>% 
+  knitr::kable()
+```
+
+Number of cells across all discrete features: 
+
+```{r}
+discrete_bars <- 
+  plot_bar(aml_data, ggtheme = theme_bw(), nrow = 2L, ncol = 2L, parallel = TRUE) %>% 
+  `$`(page_1) + 
+  labs(y = "Number of cells")
+```
+
+
+Histograms for all marker channels: 
+
+```{r}
+plot_channels <- 
+  aml_data_p %>%
+  summarize(across(one_of(ALL_MARKERS), mean)) %>% 
+  pivot_longer(cols = everything(), names_to = "channel", values_to = "mean") %>% 
+  arrange(desc(mean)) %>% 
+  pull(channel)
+
+aml_data_p %>% 
+  select(one_of(plot_channels)) %>%
+  plot_histogram(geom_histogram_args = list(bins = 40L))
+```
+
+Correlation matrix for all protein measurements: 
+
+```{r corr-matrix-euclidean}
+aml_data_p %>% 
+  select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
+  cor() %>% 
+  Heatmap(
+    col = 
+      circlize::colorRamp2(
+        breaks = seq(-1, 1, 0.5), 
+        RColorBrewer::brewer.pal(n = 5, name = "RdBu")
+      ),
+    heatmap_legend_param = list(title = "Correlation"), 
+    width = unit(15, "cm"), 
+    height = unit(15, "cm")
+  )
+```
+
+```{r corr-matrix-pearson}
+aml_data_p %>% 
+  select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
+  cor() %>% 
+  Heatmap(
+    col = 
+      circlize::colorRamp2(
+        breaks = seq(-1, 1, 0.5), 
+        RColorBrewer::brewer.pal(n = 5, name = "RdBu")
+      ),    
+    clustering_distance_rows = "pearson", 
+    clustering_distance_columns = "pearson",
+    heatmap_legend_param = list(title = "Correlation"), 
+    width = unit(15, "cm"), 
+    height = unit(15, "cm")
+  )
+```
+
+```{r corr-matrix-manhattan}
+aml_data_p %>% 
+  select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
+  cor() %>% 
+  Heatmap(
+    col = 
+      circlize::colorRamp2(
+        breaks = seq(-1, 1, 0.5), 
+        RColorBrewer::brewer.pal(n = 5, name = "RdBu")
+      ),
+    clustering_distance_rows = "manhattan", 
+    clustering_distance_columns = "manhattan",
+    heatmap_legend_param = list(title = "Correlation"), 
+    width = unit(15, "cm"), 
+    height = unit(15, "cm")
+  )
+```
 
 ### By plate
 
@@ -187,16 +311,14 @@ aml_data %>%
 
 #### Univariate histograms
 
-
-Plot and save all histograms to a directory on your local machine. 
-```{r histograms-plate-plot}
+```{r histograms-plate-plot, eval = FALSE}
 aml_data_p %>% 
   tof_plot_all_histograms(
     group_var = plate, 
     out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
     label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"),  
     label_suffix = "hist_by_plate.pdf", 
-    width = 6, 
+    width = 6,
     height = 10,
     device = "pdf"
   )
@@ -240,11 +362,72 @@ aml_data_ps %>%
 
 #### By plate (comparing patients on more than one plate)
 
-#### By patient
+```{r, warning = FALSE, message = FALSE}
+my_patients <- 
+  aml_data %>% 
+  count(patient, plate) %>% 
+  select(-n) %>% 
+  count(patient) %>% 
+  filter(n > 1) %>% 
+  pull(patient)
 
-```{r}
 aml_data_p %>% 
-  tof_histogram(channel_var = CD45, group_var = patient, ordered = TRUE)
+  filter(patient %in% my_patients) %>% 
+  mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
+  tof_histogram(channel_var = CD45, group_var = patient_plate, ordered = TRUE) + 
+  labs(y = NULL)
+
+aml_data_p %>% 
+  filter(patient %in% my_patients) %>% 
+  mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
+  tof_histogram(channel_var = pSTAT5, group_var = patient_plate, ordered = TRUE) + 
+  labs(y = NULL)
+
+aml_data_p %>% 
+  filter(patient %in% my_patients) %>% 
+  mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
+  tof_histogram(channel_var = CD34, group_var = patient_plate, ordered = TRUE) + 
+  labs(y = NULL)
+
+aml_data_p %>% 
+  filter(patient %in% my_patients) %>% 
+  mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
+  tof_histogram(channel_var = CD38, group_var = patient_plate, ordered = TRUE) + 
+  labs(y = NULL)
+```
+
+
+### By patient
+
+#### Cell counts
+
+```{r counts-patient}
+aml_data %>% 
+  count(patient) %>% 
+  knitr::kable()
+```
+
+
+```{r cell-number-patient-density}
+aml_data %>% 
+  count(patient) %>% 
+  ggplot(aes(x = n)) + 
+  geom_density() + 
+  geom_point(aes(x = n, y = 0), size = 3, shape = "|") + 
+  scale_x_continuous(
+    labels = scales::label_number(accuracy = 1, scale = 1e-3, suffix = "K")
+  ) +
+  scale_y_continuous() + 
+  labs(
+    subtitle = "Number of cells collected from each patient", 
+    caption = "Hash marks indicate individual patient values", 
+    x = "Number of cells", 
+    y = "Relative Density"
+  )
+```
+
+#### Univariate histograms
+```{r histograms-patient, eval = FALSE}
 
 aml_data_p %>% 
   tof_plot_all_histograms(
@@ -274,9 +457,78 @@ aml_data_ps %>%
 ```
 
 
-#### By patient (comparing patients with both Dx and Rx)
+### By patient (comparing patients with both Dx and Rx)
 
-#### By stimulation (surface)
+#### Cell counts
+
+```{r}
+aml_data %>% 
+  filter(patient %in% PAIRED_PATIENTS) %>% 
+  count(patient, condition)
+```
+
+#### Univariate histograms
+
+```{r signaling-condition-density-plots, message = FALSE, warning = FALSE}
+SIGNALING_MARKERS %>% 
+  syms() %>% 
+  map(
+    ~ 
+      tof_histogram_2(
+        filter(aml_data_p, patient %in% PAIRED_PATIENTS), 
+        channel_var = !!., 
+        group_var = patient, 
+        split_var = condition, 
+        alpha = 0.5, 
+        panel_scaling = FALSE
+      ) + 
+      facet_grid(cols = vars(stimulation))
+  ) %>% 
+  walk(print)
+```
+
+### By stimulation (surface)
+
+```{r, warning = FALSE, message = FALSE}
+surface_plots <- 
+  SURFACE_MARKERS %>% 
+  syms() %>% 
+  map(
+    ~ 
+      tof_histogram_2(
+        aml_data_p, 
+        channel_var = !!., 
+        group_var = patient, 
+        split_var = stimulation, 
+        alpha = 0.5,
+        ordered = TRUE,
+        panel_scaling = FALSE
+      ) 
+  )
+
+surface_plots %>% 
+  walk(print)
+
+legend <- surface_plots[[1]] %>% get_legend()
+
+surface_plots[1:9] %>% 
+  map(~ . + theme(legend.position = "none")) %>% 
+  plot_grid(plotlist = ., align = "vh", ncol = 3) %>% 
+  plot_grid(., legend, nrow = 1, rel_widths = c(3, 0.3))
+
+```
+
+
+#### Cell counts
+
+```{r cell-number-stims}
+aml_data %>% 
+  count(stimulation) %>% 
+  knitr::kable()
+```
+
+
+#### Univariate histograms
 
 ```{r}
 aml_data_p %>% 
@@ -333,13 +585,27 @@ aml_data_ps %>%
 
 
 
-#### By stimulation (signaling)
-
-
 ## Classifier 
 
 ```{r}
 
 ```
+
+## Dimensionality reduction
+
+```{r}
+pca_recipe <- 
+  recipe(~., data = aml_data_p) %>% 
+  step_zv(all_numeric()) %>% 
+  step_normalize(all_numeric()) %>% 
+  step_pca(all_numeric(), num_comp = 5) 
+
+pca_prep <- prep(pca_recipe)
+
+pca_result <- juice(pca_prep)
+
+
+```
+
 
 
