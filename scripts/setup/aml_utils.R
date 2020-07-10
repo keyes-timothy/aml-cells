@@ -118,7 +118,7 @@ marker_setup <- function(){
       OTHER_MARKERS
     )
   
-  CLASSIFIER.MARKERS <<- 
+  CLASSIFIER_MARKERS <<- 
     c(
       'CD45', 
       'CD34', 
@@ -135,7 +135,7 @@ marker_setup <- function(){
       'CD11c'
     )
   
-  CLASSIFIER.POPULATIONS <<- 
+  CLASSIFIER_POPULATIONS <<- 
     c(
       'HSC', 
       'MPP', 

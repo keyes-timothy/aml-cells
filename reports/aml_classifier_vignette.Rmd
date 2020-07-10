@@ -1,0 +1,794 @@
+---
+title: AML Classifier Vignette
+author: tkeyes
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, dpi = 300, message = FALSE, warning = FALSE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# load utility functions
+source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
+
+# Libraries
+libraries <- 
+  c(
+    "flowCore", 
+    "tidyverse", 
+    "readxl", 
+    "ggridges", 
+    "rlang", 
+    "ggthemes", 
+    "DataExplorer", 
+    "ComplexHeatmap", 
+    "foreach", 
+    "doParallel", 
+    "ggrepel", 
+    "ggiraph", 
+    "ggiraphExtra", 
+    "FlowSOM"
+  )
+
+call_libraries(libraries)
+
+# Parameters
+set_global_variables(locale = "galaxia")
+
+tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
+is_sampled <- TRUE
+md_path <- here::here("data-raw", "AML_metadata.xlsx")
+
+# Sourcing tidyTOF functions
+source_tidyTOF(tidyTOF_directory)
+
+# Misc. setup
+marker_setup()
+patient_setup()
+
+```
+
+## Read in and preprocess AML/healthy data
+
+First, we want to read in our `aml_data` and the data from our healthy, manually-gated cells (`gated_data`). 
+
+```{r}
+# we read in some data that was previously processed 
+aml_data <- 
+  file.path(DATA_DIRECTORY, "sampled_aml_data_p.rds") %>% 
+  read_rds()
+
+# and we also read the gated data from raw .fcs files...
+gated_data <- 
+  here::here("data-raw", "healthy_data") %>% #the file path for the gated data
+  tof_read_fcs(folder_path = .) %>%  #read in everything in the folder
+  tof_preprocess() #preprocess with default settings
+```
+
+Here, we use two utility functions, `tof_read_fcs()` and `tof_proprocess()`. 
+
+**`tof_read_fcs()`** painlessly reads in a single .fcs file or a folder of .fcs files into a single table, with each protein measurement represented by a column and each cell represented by a row. It also adds an additional column to each dataset representing the file name of the file that each cell comes from. 
+
+**`tof_preprocess()`** transforms each protein measurement in the dataset according to a transformation
+function that you give it (any function that you'd like). It is very customizable, but I call it here
+with no arguments because the default behavior is simply to remove the noise added during .fcs file 
+generation and perform the standard cytof arcsinh transformation for each numeric column. 
+
+
+I'll do some additional magic here to make the names a bit nicer, since `tof_read_fcs()` uses the 
+names stored in a specific keyword in the .fcs files (and you might want an altered version of these
+names)
+
+```{r}
+gated_data <- 
+  gated_data %>% 
+  rename_with( #and then do some renaming to make the names a little nicer
+    .fn = 
+      function(x) str_extract(x, pattern = "_.+") %>% 
+      str_sub(start = 2L), 
+    .cols = contains("_")
+  ) %>% 
+  select(
+    -Time, 
+    -length, 
+    -contains("Pd"), 
+    -Center, 
+    -Offset, 
+    -beadDist, 
+    -`127I`, 
+    -Residual, 
+    -Width, 
+    -cisplatin
+  ) %>%
+  rename(gated_population = names) %>% 
+  mutate(
+    gated_population = 
+      str_extract(gated_population, "_[:alpha:]+") %>% 
+      str_sub(start = 2L)
+  )
+```
+
+We can now `glimpse()` at the data: 
+
+```{r}
+glimpse(aml_data)
+```
+
+
+```{r}
+glimpse(gated_data)
+```
+
+As a final step from reading in the data, we can also check that gated data and aml data have 
+the same columns...
+
+```{r}
+setdiff(colnames(gated_data), colnames(aml_data))
+```
+
+Great! The only difference is that the `gated_data` has a column indicating which gate each cell was 
+obtained from, which is exactly what we want. 
+
+## Build and apply the single-cell classifier
+
+### Syntax for building the classifier
+
+The new version of the single-cell classifier has 2 steps after the data are pre-processed. 
+
+First, we build the classifier using the `tof_classifier_build()` command. This command takes a few 
+arguments (in addition to the gated data, which are provided to the first argument): 
+
+* **population_vector:** a character vector indicating which population each cell (i.e. each row of `gated_data` comes from
+* **classifier_markers:** a character vector indicating which markers should be used for the classification
+
+```{r, message = FALSE}
+classifier_fit <- 
+  gated_data %>% 
+  tof_classifier_build(
+    population_vector = gated_data$gated_population, 
+    classifier_markers = SURFACE_MARKERS
+  )
+```
+
+This gives us a `classifier_fit` object. This object is essentially a table that contains the information 
+we need to do any computations with mahalanobis distance (or other distances that are often used 
+with cytof data). 
+
+```{r}
+glimpse(classifier_fit)
+```
+
+As you can see above, each classifier_fit object has 3 columns: the first one describes what the 
+manually-gated population name is, the second one contains the centroid information for each 
+population, and the third column contains the covariance matrix for each column. 
+
+(A note: One of the ideas here is that, by building the classifier first, you can save time later 
+by not needing to retrain your classifier every time you want to run it. You only need a few pieces
+of information from the healthy dataset to run the classifier, so we can extract those in a 
+preliminary step and then use them as much as we'd like later.) 
+
+
+
+
+
+### Syntax for applying the single-cell classifier
+
+The next step of the classifier will call the `tof_classifier_apply()` function. It requires you 
+to give it a tibble containing all of the cells you want to classify and the `classifier_fit` object
+you just made. 
+
+It takes a few arguments: 
+
+* **classifier_fit** - the table we just made from `tof_classifier_build()`
+* **num_cores** - the number of cores you want to use on your computer to speed up the calculations
+* **parallel_var** - the discrete variable in your dataset you want to parallelize the computation over (i.e. how you want to split up the data to run on different cores of your machine)
+* **dist_fun** - the distance function you want to use the perform the classification. The default is 
+"mahalanobis", but "cosine" and "pearson" distances are also implemented. 
+
+```{r}
+classifier_data <- 
+  aml_data %>% 
+  tof_classifier_apply(
+    classifier_fit = classifier_fit, 
+    num_cores = 1, 
+    parallel_var = plate, 
+    dist_fun = "mahalanobis"
+  )
+```
+
+The output of  `tof_apply_classifier()`  is a tibble that has one row for each cell in 
+your dataset and one column for each population in the `classifier_fit` object (encoding each cell's
+distance to the centroid of that population). It also has an additional column with the name of the 
+population that each cell was "sorted" into based on which distance is the smallest for each cell.
+
+```{r}
+glimpse(classifier_data)
+```
+
+From there, you can easily take the output of `tof_apply_classifier()` and bind it to the original dataset to 
+start making some plots and comparisons. 
+
+```{r}
+aml_data <-
+  bind_cols(aml_data, classifier_data)
+```
+
+You can also use distance metrics other than the mahalanobis distance...
+
+```{r}
+classifier_data_cosine <- 
+  aml_data %>% 
+  tof_classifier_apply(
+    classifier_fit = classifier_fit, 
+    num_cores = 1, 
+    parallel_var = plate, 
+    dist_fun = "cosine"
+  )
+
+classifier_data_pearson <- 
+  aml_data %>% 
+  tof_classifier_apply(
+    classifier_fit = classifier_fit, 
+    num_cores = 1, 
+    parallel_var = plate, 
+    dist_fun = "pearson"
+  )
+
+aml_data <- 
+  bind_cols(aml_data, classifier_data_cosine, classifier_data_pearson)
+```
+
+So now our dataset has all of these variables: 
+
+```{r}
+aml_data %>%
+  colnames()
+```
+
+### Comparing classifier accuracy across distance metrics
+
+We can compare each of these distance metrics' accuracy while classifying the original healthy
+cells: 
+
+```{r}
+healthy_classification <- 
+  function(dist_fun = NULL) { 
+    gated_data %>% 
+      tof_classifier_build(
+        population_vector = gated_data$gated_population, 
+        classifier_markers = SURFACE_MARKERS
+      ) %>% 
+      tof_classifier_apply(
+        tof_tibble = gated_data, 
+        classifier_fit = ., 
+        parallel_var = gated_population, 
+        dist_fun = dist_fun
+      )
+  }
+
+classified_gates <- 
+  gated_data %>% 
+  bind_cols(
+    healthy_classification("mahalanobis"), 
+    healthy_classification("pearson"), 
+    healthy_classification("cosine")
+  )
+```
+
+```{r}
+correct_mahalanobis <- 
+  classified_gates %>% 
+  group_by(gated_population) %>% 
+  summarize(prop_mahalanobis = sum(mahalanobis_cluster == gated_population) / n()) 
+
+correct_cosine <- 
+  classified_gates %>% 
+  group_by(gated_population) %>% 
+  summarize(prop_cosine = sum(cosine_cluster == gated_population) / n())
+
+correct_pearson <- 
+  classified_gates %>% 
+  group_by(gated_population) %>% 
+  summarize(prop_pearson = sum(pearson_cluster == gated_population) / n()) 
+
+correct <- 
+  left_join(correct_mahalanobis, correct_cosine, by = "gated_population") %>% 
+  left_join(correct_pearson, by = "gated_population")
+
+correct %>% 
+  arrange(desc(prop_mahalanobis)) %>% 
+  knitr::kable()
+
+```
+
+Overall, we can see (as expected) that the Mahalanobis distance metric tends to perform the best 
+at recapitulating manual gating. But looking at the pattern of correct vs. incorrect choices 
+using the other two distances also tells us a few things. 
+
+* Cosine distance and pearson distance perform essentially identically to one another; this makes
+sense, as they are computed in almost the exact same way (with slighly different scaling)
+
+* Cosine and pearson distance tend to perform comparably to Mahalanobis distance in some of the 
+subpopulations, but in other of the subpopulations they perform significantly worse. This suggests
+that the source of error may not be inherent to the metrics themselves (which do not perform 
+uniformly poorly), but may be a function of how we define the subpopulations they are classifying 
+into. We look into two of these characteristics below: 
+
+```{r}
+#frobenius norm of covariance matrix 
+f_norms <- 
+  classifier_fit %>%
+  mutate(f_norm = map_dbl(covariance_matrix, ~ sum(abs(.x)))) %>% 
+  select(population, f_norm)
+
+
+#size of each subpopulation in the cancer dataset
+
+pop_sizes <- 
+  gated_data %>% 
+  count(gated_population, name = "num_cells") %>% 
+  select(population = gated_population, num_cells)
+
+pop_features_data <-
+  f_norms %>% 
+  left_join(pop_sizes, by = "population") %>% 
+  left_join(correct, by = c("population" = "gated_population")) %>% 
+  pivot_longer(
+    cols = starts_with("prop_"), 
+    names_to = "distance_metric", 
+    values_to = "value", 
+    names_prefix = "prop_"
+  )
+
+pop_features_data %>% 
+  mutate(
+    distance_metric = 
+      factor(
+        distance_metric, 
+        levels = c("mahalanobis", "cosine", "pearson")
+      )
+  ) %>% 
+  ggplot(
+    aes(x = f_norm, y = value, color = distance_metric, fill = distance_metric)
+  ) + 
+  geom_line(size = 1) + 
+  geom_point(shape = 21, size = 3, color = "black") + 
+  geom_text_repel(
+    aes(label = population), 
+    data = 
+      pop_features_data %>% 
+      slice_max(order_by = value, n = 1), 
+    size = 3, 
+    color = "black", 
+    nudge_y = 0.05
+  ) + 
+  scale_color_tableau() + 
+  scale_fill_tableau() + 
+  labs(
+    subtitle = "classification accuracy as a function of Frobenius norm", 
+    x = "Frobenius norm of the covariance matrix", 
+    y = "Proportion of healthy cells correctly classified", 
+    fill = "Distance metric", 
+    color = "Distance metric"
+  )
+
+pop_features_data %>% 
+  mutate(
+    distance_metric = 
+      factor(
+        distance_metric, 
+        levels = c("mahalanobis", "cosine", "pearson")
+      )
+  ) %>% 
+  ggplot(
+    aes(x = num_cells, y = value, color = distance_metric, fill = distance_metric)
+  ) + 
+  geom_line(size = 1) + 
+  geom_point(shape = 21, size = 3, color = "black") + 
+  geom_text_repel(
+    aes(label = population), 
+    data = 
+      pop_features_data %>% 
+      slice_max(order_by = value, n = 1, with_ties = FALSE), 
+    size = 3, 
+    color = "black",
+    nudge_x = 0.05,
+    nudge_y = 0.03
+  ) + 
+  scale_x_log10() + 
+  scale_color_tableau() + 
+  scale_fill_tableau() + 
+  labs(
+    subtitle = "classification accuracy as a function of population size", 
+    x = "log(Number of cells in the subpopulation)", 
+    y = "Proportion of healthy cells correctly classified", 
+    fill = "Distance metric", 
+    color = "Distance metric"
+  )
+
+
+```
+
+
+From the first plot above, we can see that 3 of the 4 worst-performing populations are the ones 
+whose covariance matrix has the largest Frobenius norm (which gives a rough estimate of the 
+overall dispersion of a multi-dimensional distribution for the chosen markers). If the markers were 
+chosen differently or the subpopulations were defined differently, its possible that these 
+populations would be more differentiable by alternative metrics as well. 
+
+From the second plot, we can see that the performance of classifier is not necessarily related to the subpopulation size of the cells in the healthy dataset. 
+
+## Features of different subpopulations
+
+We can also start interrogating what the expression of different markers looks like in each 
+developmental subpopulation with a few plots. 
+
+We can start by making some "radar plots" that represent the identities of each developmental 
+subpopulation in our dataset. These plots represent the degree to which each population "identifies" 
+as itself versus other developmental subtypes (by taking the inverse of the distance metric, then 
+normalizing each cell so that its largest value is 1). 
+
+
+```{r, fig.width = 9, fig.height = 9, echo = FALSE}
+radar_distance_mahalanobis <- 
+  aml_data %>% 
+  select(starts_with("mahalanobis_")) %>% 
+  rename_with(
+    ~ str_remove(.x, "mahalanobis_") %>% 
+      str_sub(start = 1L, end = 7L)
+  ) %>% 
+  rowwise() %>% 
+  mutate(row_sum = sum(c_across(-cluster))) %>% 
+  ungroup() %>% 
+  mutate(cluster = factor(cluster, levels = CLASSIFIER_POPULATIONS)) %>% 
+  mutate(across(c(-cluster, -row_sum), function(x) (row_sum/x))) %>% 
+  select(-row_sum) %>% 
+  mutate(row_max = pmax(!!!syms(str_sub(CLASSIFIER_POPULATIONS, end = 7L)))) %>% 
+  mutate(across(c(-cluster, -row_max), function(x) x/row_max)) %>% 
+  select(-row_max)
+         
+
+radar_distance_mahalanobis %>% 
+  ggRadar(
+    mapping = aes(group = cluster), 
+    legend.position = "none", 
+    rescale = FALSE
+    #scales = "free"
+    ) + 
+  facet_wrap(facets = vars(cluster)) + 
+  scale_y_discrete(breaks = NULL) + 
+  scale_fill_tableau() + 
+  scale_color_tableau() + 
+  theme_minimal() + 
+  theme(strip.text = element_text(size = 12, face = "bold")) + 
+  labs(
+    subtitle = "Mahalanobis cluster features",
+    fill = NULL, 
+    color = NULL
+  )
+```
+
+```{r, fig.width = 9, fig.height = 9, echo = FALSE}
+radar_distance_cosine <- 
+  aml_data %>% 
+  select(starts_with("cosine_")) %>% 
+  rename_with(
+    ~ str_remove(.x, "cosine_") %>% 
+      str_sub(start = 1L, end = 7L)
+  ) %>% 
+  rowwise() %>% 
+  mutate(row_sum = sum(c_across(-cluster))) %>% 
+  ungroup() %>% 
+  mutate(cluster = factor(cluster, levels = CLASSIFIER_POPULATIONS)) %>% 
+  mutate(across(c(-cluster, -row_sum), function(x) (row_sum/x))) %>% 
+  select(-row_sum) %>% 
+  mutate(row_max = pmax(!!!syms(str_sub(CLASSIFIER_POPULATIONS, end = 7L)))) %>% 
+  mutate(across(c(-cluster, -row_max), function(x) x/row_max)) %>% 
+  select(-row_max)
+         
+
+radar_distance_cosine %>% 
+  ggRadar(
+    mapping = aes(group = cluster), 
+    legend.position = "none", 
+    rescale = FALSE
+    #scales = "free"
+    ) + 
+  facet_wrap(facets = vars(cluster)) + 
+  scale_y_discrete(breaks = NULL) + 
+  scale_fill_tableau() + 
+  scale_color_tableau() + 
+  theme_minimal() + 
+  theme(strip.text = element_text(size = 12, face = "bold")) + 
+  labs(
+    subtitle = "Cosine cluster features",
+    fill = NULL, 
+    color = NULL
+  )
+```
+
+```{r, fig.width = 9, fig.height= 9, echo = FALSE}
+radar_distance_pearson <- 
+  aml_data %>% 
+  select(starts_with("pearson_")) %>% 
+  rename_with(
+    ~ str_remove(.x, "pearson_") %>% 
+      str_sub(start = 1L, end = 7L)
+  ) %>% 
+  rowwise() %>% 
+  mutate(row_sum = sum(c_across(-cluster))) %>% 
+  ungroup() %>% 
+  mutate(cluster = factor(cluster, levels = CLASSIFIER_POPULATIONS)) %>% 
+  mutate(across(c(-cluster, -row_sum), function(x) (row_sum/x))) %>% 
+  select(-row_sum) %>% 
+  mutate(row_max = pmax(!!!syms(str_sub(CLASSIFIER_POPULATIONS, end = 7L)))) %>% 
+  mutate(across(c(-cluster, -row_max), function(x) x/row_max)) %>% 
+  select(-row_max)
+         
+
+radar_distance_pearson %>% 
+  ggRadar(
+    mapping = aes(group = cluster), 
+    legend.position = "none", 
+    rescale = FALSE
+    #scales = "free"
+    ) + 
+  facet_wrap(facets = vars(cluster)) + 
+  scale_y_discrete(breaks = NULL) + 
+  scale_fill_tableau() + 
+  scale_color_tableau() + 
+  theme_minimal() + 
+  theme(strip.text = element_text(size = 12, face = "bold")) + 
+  labs(
+    subtitle = "Pearson cluster features",
+    fill = NULL, 
+    color = NULL
+  )
+```
+
+These plots are a bit hard to interpret, so we can walk through them step by step. 
+
+* Each circle represents a single developmental subpopulation that came out of our classifier. 
+* On each circle, the different points represent the "similarity" (aka the inverse of distance) that each cell type has to each healthy cell type, on average. For each circle, these values are normalized such that the maximum similarity has a value of 1 in each circle. 
+* In one way of thinking about it, we could think of our classifier as wanting to minimize the total shaded area across all circles in the dataset: the more area there is on any given circle, the more "ambiguous" that cell type is and the harder it will be to classify correctly. 
+
+With these bullets in mind, we can interpret the plots for each distance with a few observations: 
+
+* With respect to our manually-gated myeloid populations, there's ambiguity in pretty much all of the subpopulations for all distance metrics. 
+* That being said, the Mahalanobis distance seems to minimize the uncertainty better than the other two metrics. 
+
+We can also make similar plots with the marker measurements themselves rather than the distance 
+metrics. In this case, the mean value for each marker is plotted along its radial axis. 
+
+```{r, echo = FALSE, fig.width = 9, fig.height = 9}
+
+radar_distance_markers <- 
+  aml_data %>% 
+  select(all_of(CLASSIFIER_MARKERS), cluster = mahalanobis_cluster) %>% 
+  mutate(cluster = factor(cluster, levels = CLASSIFIER_POPULATIONS)) %>% 
+  group_by(cluster) %>% 
+  summarize(across(everything(), mean)) %>% 
+  mutate(across(-cluster, ~ .x/max(.x)))
+         
+radar_distance_markers %>% 
+  ggRadar(
+    mapping = aes(group = cluster), 
+    legend.position = "none", 
+    rescale = TRUE
+    ) + 
+  facet_wrap(facets = vars(cluster)) + 
+  scale_y_discrete(breaks = NULL) + 
+  scale_fill_tableau() + 
+  scale_color_tableau() + 
+  theme_minimal() + 
+  theme(strip.text = element_text(size = 10, face = "bold")) + 
+  labs(
+    subtitle = "Marker cluster features",
+    fill = NULL, 
+    color = NULL
+  )
+```
+
+From these plots, we can see that some subpopulations (for example, MPP and MEP) are only distinguished 
+from other clusters with markers that are expressed at relatively low levels compared to other markers, 
+which may make them harder to classify accurately. I'm still starting at this to try to wrap my head 
+around it. 
+
+To help illustrate this, here are a few example histograms created with the function `tof_histogram()`. 
+These are some of the markers that, in theory, help to differentiate some of the early myeloid progenitors
+from one another, but we can see that they have very low expression levels overall compared to some of the higher-expressed markers like CD34. 
+
+```{r}
+aml_data %>% 
+  tof_histogram(
+    channel_var = `HLA-DR`, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+
+aml_data %>% 
+  tof_histogram(
+    channel_var = CD41, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+
+aml_data %>% 
+  tof_histogram(
+    channel_var = CD135, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+
+aml_data %>% 
+  tof_histogram(
+    channel_var = CD45RA, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+
+aml_data %>% 
+  tof_histogram(
+    channel_var = CD34, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+```
+
+
+### Using different clustering methods 
+
+So, what happens if we don't want to (or can't) manually-gate our populations of interest? Luckily, 
+`tidyTOF` is built with "modular code," which means that it is very flexible. Suppose we are 
+interested in classifying our cancer cells into FlowSOM clusters instead of manually-gated clusters. 
+For this, we simply use the function `tof_cluster_flowSOM()` and then apply the classifier from there. 
+
+
+We cluster using the surface markers in our dataset and ask for 20 clusters to be returned. 
+
+```{r}
+flowSOM_clusters <- 
+  gated_data %>% 
+  tof_cluster_flowSOM(clustering_markers = SURFACE_MARKERS, num_clusters = 20)
+
+gated_data <- 
+  gated_data %>% 
+  mutate(flowSOM_clusters = flowSOM_clusters)
+```
+
+
+With these clusters in hand, we can then painlessly apply the classifier using the flowSOM-identified 
+clusters rather than manually-identified ones with just a few lines of code. 
+
+```{r}
+flowSOM_mahal_classifications <- 
+  gated_data %>% 
+  tof_classifier_build(
+    population_vector = flowSOM_clusters, 
+    classifier_markers = SURFACE_MARKERS
+  ) %>% 
+  tof_classifier_apply(
+    tof_tibble = aml_data, 
+    classifier_fit = ., 
+    num_cores = 10, 
+    parallel_var = plate
+  )
+
+flowSOM_cosine_classifications <- 
+  gated_data %>% 
+  tof_classifier_build(
+    population_vector = flowSOM_clusters, 
+    classifier_markers = SURFACE_MARKERS
+  ) %>% 
+  tof_classifier_apply(
+    tof_tibble = aml_data, 
+    classifier_fit = ., 
+    num_cores = 10, 
+    parallel_var = plate, 
+    dist_fun = "cosine"
+  )
+```
+
+
+And we then visualize with radar plots as before to see how "ambiguous" these clusters are...
+
+
+```{r, echo = FALSE, fig.width = 9, fig.height = 9}
+radar_distance_mahalanobis <- 
+  flowSOM_mahal_classifications %>% 
+  rename_with(
+    ~ str_remove(.x, "mahalanobis_")
+  ) %>% 
+  rowwise() %>% 
+  mutate(row_sum = sum(c_across(-cluster))) %>% 
+  ungroup() %>% 
+  mutate(cluster = factor(cluster, levels = as.character(1:20))) %>% 
+  mutate(across(c(-cluster, -row_sum), function(x) (row_sum/x))) %>% 
+  select(-row_sum) %>% 
+  mutate(row_max = pmax(!!!syms(str_sub(as.character(1:20), end = 7L)))) %>% 
+  mutate(across(c(-cluster, -row_max), function(x) x/row_max)) %>% 
+  select(-row_max)
+         
+
+radar_distance_mahalanobis %>% 
+  ggRadar(
+    mapping = aes(group = cluster), 
+    legend.position = "none", 
+    rescale = FALSE
+    #scales = "free"
+    ) + 
+  facet_wrap(facets = vars(cluster)) + 
+  scale_y_discrete(breaks = NULL) + 
+  scale_fill_tableau(palette = "Tableau 20") + 
+  scale_color_tableau("Tableau 20") + 
+  theme_minimal() + 
+  theme(legend.position = "none") + 
+  labs(
+    subtitle = "Mahalanobis cluster features",
+    fill = NULL, 
+    color = NULL
+  )
+
+```
+
+```{r, echo = FALSE, fig.width = 9, fig.height = 9}
+radar_distance_cosine <- 
+  flowSOM_cosine_classifications %>% 
+  rename_with(
+    ~ str_remove(.x, "cosine_")
+  ) %>% 
+  rowwise() %>% 
+  mutate(row_sum = sum(c_across(-cluster))) %>% 
+  ungroup() %>% 
+  mutate(cluster = factor(cluster, levels = as.character(1:20))) %>% 
+  mutate(across(c(-cluster, -row_sum), function(x) (row_sum/x))) %>% 
+  select(-row_sum) %>% 
+  mutate(row_max = pmax(!!!syms(str_sub(as.character(1:20), end = 7L)))) %>% 
+  mutate(across(c(-cluster, -row_max), function(x) x/row_max)) %>% 
+  select(-row_max)
+         
+
+radar_distance_cosine %>% 
+  ggRadar(
+    mapping = aes(group = cluster), 
+    legend.position = "none", 
+    rescale = FALSE
+    #scales = "free"
+    ) + 
+  facet_wrap(facets = vars(cluster)) + 
+  scale_y_discrete(breaks = NULL) + 
+  scale_fill_tableau(palette = "Tableau 20") + 
+  scale_color_tableau("Tableau 20") + 
+  theme_minimal() + 
+  theme(legend.position = "none") + 
+  labs(
+    subtitle = "Cosine cluster features",
+    fill = NULL, 
+    color = NULL
+  )
+
+```
+
+
+From these plots, we can maybe convince ourselves that adding more clusters to our workflow has the effect
+of leading to more sharp "spikes" in similarity for one or a small number of clusters using our 
+classifier on the AML dataset. Further analyses down this same line of reasoning will interrogate the 
+protein-level features of each flowSOM cluster as well as how they differ between cancer/healthy (and 
+which healthy clusters distribute into which flowSOM clusters). 
+
+This is just meant to illustrate some of the power and convenience of packaging these types of analyses in a tidy way, as doing so can make reproducible, highly-iterative analyses doable with relative ease. More functions and AML-specific analyses are incoming as the modeling components of {tidyTOF} take shape. 
+
+## Future Directions
+
+* Implement several other unbiased clustering methods in {tidyTOF}
+* Finish implementing `tof_dim_reduce()`: a function for performing PCA, tSNE, and UMAP. 
+* Implement explicit modeling capability in {tidyTOF} 
+  * GLMs (next week)
+  * NNs (end of July/first week of August)
+* Finalize ability to write out .fcs files accurately (this weekend). 
+
+
