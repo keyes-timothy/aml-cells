@@ -9,33 +9,42 @@ tkeyes
     classifier](#build-and-apply-the-single-cell-classifier)
       - [Syntax for building the
         classifier](#syntax-for-building-the-classifier)
-      - [Applying the classifier](#applying-the-classifier)
+      - [Syntax for applying the single-cell
+        classifier](#syntax-for-applying-the-single-cell-classifier)
       - [Comparing classifier accuracy across distance
         metrics](#comparing-classifier-accuracy-across-distance-metrics)
-      - [Marker expression among different
-        subpopulations](#marker-expression-among-different-subpopulations)
+  - [Features of different
+    subpopulations](#features-of-different-subpopulations)
       - [Using different clustering
         methods](#using-different-clustering-methods)
+  - [Future Directions](#future-directions)
 
 ``` r
+# load utility functions
+source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
+
 # Libraries
-library(flowCore)
-library(tidyverse)
-library(readxl)
-library(ggridges)
-library(rlang)
-library(ggthemes)
-library(DataExplorer)
-library(ComplexHeatmap)
-library(foreach)
-library(doParallel)
-library(ggrepel)
-library(ggiraphExtra)
-library(ggiraph)
-library(FlowSOM)
+libraries <- 
+  c(
+    "flowCore", 
+    "tidyverse", 
+    "readxl", 
+    "ggridges", 
+    "rlang", 
+    "ggthemes", 
+    "DataExplorer", 
+    "ComplexHeatmap", 
+    "foreach", 
+    "doParallel", 
+    "ggrepel", 
+    "ggiraph", 
+    "ggiraphExtra", 
+    "FlowSOM"
+  )
+
+call_libraries(libraries)
 
 # Parameters
-source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
 set_global_variables(locale = "galaxia")
 
 tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
@@ -45,11 +54,15 @@ md_path <- here::here("data-raw", "AML_metadata.xlsx")
 # Sourcing tidyTOF functions
 source_tidyTOF(tidyTOF_directory)
 
+# Misc. setup
 marker_setup()
 patient_setup()
 ```
 
 ## Read in and preprocess AML/healthy data
+
+First, we want to read in our `aml_data` and the data from our healthy,
+manually-gated cells (`gated_data`).
 
 ``` r
 # we read in some data that was previously processed 
@@ -67,18 +80,18 @@ gated_data <-
 Here, we use two utility functions, `tof_read_fcs()` and
 `tof_proprocess()`.
 
-*`tof_read_fcs()`* painlessly reads in a single .fcs file or a folder of
-.fcs files into a single table, with each protein measurement
+**`tof_read_fcs()`** painlessly reads in a single .fcs file or a folder
+of .fcs files into a single table, with each protein measurement
 represented by a column and each cell represented by a row. It also adds
 an additional column to each dataset representing the file name of the
 file that each cell comes from.
 
-*`tof_preprocess()`* transforms each protein measurement in the dataset
-according to a transformation function that you give it (any function
-that you’d like). It is very customizable, but I call it here with no
-arguments because the default behavior is simply to remove the noise
-added during .fcs file generation and perform the standard cytof arcsinh
-transformation for each numeric column.
+**`tof_preprocess()`** transforms each protein measurement in the
+dataset according to a transformation function that you give it (any
+function that you’d like). It is very customizable, but I call it here
+with no arguments because the default behavior is simply to remove the
+noise added during .fcs file generation and perform the standard cytof
+arcsinh transformation for each numeric column.
 
 I’ll do some additional magic here to make the names a bit nicer, since
 `tof_read_fcs()` uses the names stored in a specific keyword in the .fcs
@@ -114,6 +127,64 @@ gated_data <-
 ```
 
 We can now `glimpse()` at the data:
+
+``` r
+glimpse(aml_data)
+```
+
+    ## Observations: 2,252,598
+    ## Variables: 51
+    ## $ CD45        <dbl> 5.654604, 5.908090, 5.232206, 4.912709, 5.909177, 5.02917…
+    ## $ CD61        <dbl> 0.1986901, 2.5859073, 0.3900353, 0.1986901, 2.7255958, 0.…
+    ## $ CD99        <dbl> 3.4913567, 1.1379820, 2.7764723, 2.7764723, 3.0179292, 1.…
+    ## $ `127I`      <dbl> 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.…
+    ## $ CD45RA      <dbl> 3.146005, 1.879864, 1.992836, 2.824903, 2.142112, 2.09471…
+    ## $ CD93        <dbl> 0.1986901, 1.6837431, 0.7326683, 0.1986901, 1.6837431, 0.…
+    ## $ CD3_CD19    <dbl> 0.3900353, 0.7326683, 0.8813736, 0.8813736, 0.7326683, 1.…
+    ## $ CCR2        <dbl> 0.1986901, 1.3504407, 3.6994419, 3.1962586, 3.9818970, 0.…
+    ## $ CD117       <dbl> 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.…
+    ## $ CD123       <dbl> 0.1986901, 0.5688249, 0.1986901, 1.3504407, 0.1986901, 0.…
+    ## $ CD64        <dbl> 0.3900353, 0.7326683, 3.2897913, 4.2255865, 3.4791097, 0.…
+    ## $ CD90        <dbl> 0.3900353, 0.1986901, 0.1986901, 0.1986901, 0.5688249, 0.…
+    ## $ CD38        <dbl> 3.3753395, 0.1986901, 1.7532289, 2.4917799, 1.4436355, 3.…
+    ## $ CD34        <dbl> 0.1986901, 1.1379820, 0.1986901, 0.1986901, 0.1986901, 0.…
+    ## $ CEBPa       <dbl> 1.1379820, 0.3900353, 1.1379820, 2.5859073, 1.0159731, 1.…
+    ## $ pSTAT5      <dbl> 1.4436355, 1.4436355, 0.7326683, 1.0159731, 1.3504407, 1.…
+    ## $ CD11c       <dbl> 3.7190269, 4.1591271, 2.4583552, 1.2489833, 3.5731337, 1.…
+    ## $ CD13        <dbl> 0.3900353, 4.9156455, 3.0748298, 1.9928358, 4.1715437, 0.…
+    ## $ pAkt        <dbl> 1.0159731, 0.1986901, 0.8813736, 1.0159731, 0.7326683, 0.…
+    ## $ `TIM-3`     <dbl> 1.1379820, 0.3900353, 0.3900353, 0.3900353, 0.5688249, 0.…
+    ## $ CD56        <dbl> 4.4068679, 1.5296605, 1.8184465, 2.5554936, 1.8184465, 1.…
+    ## $ CD10        <dbl> 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.5688249, 2.…
+    ## $ PU.1        <dbl> 0.3900353, 2.1874218, 2.7764723, 1.9378793, 1.8184465, 0.…
+    ## $ CD33        <dbl> 0.1986901, 3.0748298, 3.0748298, 3.6994419, 3.9818970, 0.…
+    ## $ CD14        <dbl> 0.1986901, 3.7663759, 1.1379820, 0.7326683, 4.6132368, 0.…
+    ## $ `caspase-3` <dbl> 0.5688249, 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.…
+    ## $ `GATA-1`    <dbl> 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.5688249, 0.…
+    ## $ pSTAT3      <dbl> 0.1986901, 0.1986901, 0.3900353, 0.5688249, 0.3900353, 0.…
+    ## $ CD41        <dbl> 0.1986901, 1.0159731, 0.1986901, 0.1986901, 1.2489833, 0.…
+    ## $ CD16        <dbl> 1.1379820, 0.1986901, 0.1986901, 0.1986901, 0.3900353, 0.…
+    ## $ CD68        <dbl> 1.5296605, 5.2364703, 4.5434079, 4.2255865, 4.1144141, 1.…
+    ## $ MPO         <dbl> 1.0159731, 4.1898842, 4.7707564, 4.9445462, 4.6597480, 1.…
+    ## $ pErk        <dbl> 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.1986901, 0.…
+    ## $ CD47        <dbl> 5.411666, 4.248699, 3.863274, 4.397067, 4.426187, 4.92149…
+    ## $ CD135       <dbl> 0.8813736, 0.1986901, 0.1986901, 1.6837431, 0.3900353, 0.…
+    ## $ CD109       <dbl> 0.1986901, 0.3900353, 0.5688249, 0.1986901, 0.7326683, 0.…
+    ## $ pS6         <dbl> 1.4436355, 1.1379820, 0.5688249, 2.3124383, 0.1986901, 3.…
+    ## $ CD49f       <dbl> 0.1986901, 0.8813736, 0.1986901, 0.1986901, 0.8813736, 0.…
+    ## $ `HLA-DR`    <dbl> 0.1986901, 3.7190269, 0.1986901, 3.6277106, 1.6094379, 4.…
+    ## $ CD71        <dbl> 0.3900353, 0.5688249, 0.1986901, 1.8184465, 0.3900353, 0.…
+    ## $ pCreb       <dbl> 3.871635, 3.319126, 3.811586, 3.375339, 3.738236, 4.69692…
+    ## $ `191Ir`     <dbl> 4.861421, 5.186299, 4.640630, 5.247052, 4.659748, 5.20623…
+    ## $ `193Ir`     <dbl> 5.420555, 5.860224, 5.265821, 5.823055, 5.397278, 5.85106…
+    ## $ cisplatin   <dbl> 0.1986901, 0.1986901, 0.5688249, 0.7326683, 0.5688249, 0.…
+    ## $ CD11b       <dbl> 2.0947125, 2.7255958, 1.2489833, 0.1986901, 2.8249033, 0.…
+    ## $ file_names  <chr> "Plate1_BM5721 Basal_comped.fcs", "Plate1_BM5721 Basal_co…
+    ## $ plate       <fct> plate1, plate1, plate1, plate1, plate1, plate1, plate1, p…
+    ## $ patient     <chr> "bm5721", "bm5721", "bm5721", "bm5721", "bm5721", "bm5721…
+    ## $ stimulation <chr> "Basal", "Basal", "Basal", "Basal", "Basal", "Basal", "Ba…
+    ## $ condition   <chr> "healthy", "healthy", "healthy", "healthy", "healthy", "h…
+    ## $ cell_id     <chr> "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", …
 
 ``` r
 glimpse(gated_data)
@@ -183,11 +254,19 @@ we want.
 
 ### Syntax for building the classifier
 
-The new version of the single-cell classifier has 2 steps once the data
+The new version of the single-cell classifier has 2 steps after the data
 are pre-processed.
 
-First, we build the classifier using the `tof_build_classifier()`
-command:
+First, we build the classifier using the `tof_classifier_build()`
+command. This command takes a few arguments (in addition to the gated
+data, which are provided to the first argument):
+
+  - **population\_vector:** a character vector indicating which
+    population each cell (i.e. each row of `gated_data` comes from
+  - **classifier\_markers:** a character vector indicating which markers
+    should be used for the classification
+
+<!-- end list -->
 
 ``` r
 classifier_fit <- 
@@ -198,8 +277,8 @@ classifier_fit <-
   )
 ```
 
-This gives us a `classifier_fit` object - which is essentially a table
-that contains the information we need to do any computations with
+This gives us a `classifier_fit` object. This object is essentially a
+table that contains the information we need to do any computations with
 mahalanobis distance (or other distances that are often used with cytof
 data).
 
@@ -223,24 +302,29 @@ the third column contains the covariance matrix for each column.
 first, you can save time later by not needing to retrain your classifier
 every time you want to run it. You only need a few pieces of information
 from the healthy dataset to run the classifier, so we can extract those
-in a preliminary step and then use them as much as we’d like later).
+in a preliminary step and then use them as much as we’d like later.)
 
-### Applying the classifier
+### Syntax for applying the single-cell classifier
 
 The next step of the classifier will call the `tof_classifier_apply()`
 function. It requires you to give it a tibble containing all of the
 cells you want to classify and the `classifier_fit` object you just
 made.
 
-It takes a few arguments: \* *classifier\_fit* - the table we just made
-from `tof_classifier_build()` \* *num\_cores* - the number of cores you
-want to use on your computer to speed up the calculations \*
-*parallel\_var* - the discrete variable in your dataset you want to
-parallelize the computation over (i.e. how you want to split up the data
-to run on different cores of your machine) \* *dist\_fun* - the distance
-function you want to use the perform the classification. The default is
-“mahalanobis”, but “cosine” and “pearson” distances are also
-implemented.
+It takes a few arguments:
+
+  - **classifier\_fit** - the table we just made from
+    `tof_classifier_build()`
+  - **num\_cores** - the number of cores you want to use on your
+    computer to speed up the calculations
+  - **parallel\_var** - the discrete variable in your dataset you want
+    to parallelize the computation over (i.e. how you want to split up
+    the data to run on different cores of your machine)
+  - **dist\_fun** - the distance function you want to use the perform
+    the classification. The default is “mahalanobis”, but “cosine” and
+    “pearson” distances are also implemented.
+
+<!-- end list -->
 
 ``` r
 classifier_data <- 
@@ -362,7 +446,7 @@ aml_data %>%
 
 ### Comparing classifier accuracy across distance metrics
 
-We can compare each of these distance metrics’ accuracy in terms of
+We can compare each of these distance metrics’ accuracy while
 classifying the original healthy cells:
 
 ``` r
@@ -492,7 +576,7 @@ pop_features_data %>%
       slice_max(order_by = value, n = 1), 
     size = 3, 
     color = "black", 
-    nudge_y = 0.1
+    nudge_y = 0.05
   ) + 
   scale_color_tableau() + 
   scale_fill_tableau() + 
@@ -505,7 +589,7 @@ pop_features_data %>%
   )
 ```
 
-![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-15-1.png)<!-- -->
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
 
 ``` r
 pop_features_data %>% 
@@ -525,10 +609,11 @@ pop_features_data %>%
     aes(label = population), 
     data = 
       pop_features_data %>% 
-      slice_max(order_by = num_cells, n = 1, with_ties = FALSE), 
+      slice_max(order_by = value, n = 1, with_ties = FALSE), 
     size = 3, 
-    color = "black", 
-    nudge_y = 0.1
+    color = "black",
+    nudge_x = 0.05,
+    nudge_y = 0.03
   ) + 
   scale_x_log10() + 
   scale_color_tableau() + 
@@ -542,7 +627,7 @@ pop_features_data %>%
   )
 ```
 
-![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-15-2.png)<!-- -->
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-16-2.png)<!-- -->
 
 From the first plot above, we can see that 3 of the 4 worst-performing
 populations are the ones whose covariance matrix has the largest
@@ -556,7 +641,7 @@ From the second plot, we can see that the performance of classifier is
 not necessarily related to the subpopulation size of the cells in the
 healthy dataset.
 
-### Marker expression among different subpopulations
+## Features of different subpopulations
 
 We can also start interrogating what the expression of different markers
 looks like in each developmental subpopulation with a few plots.
@@ -568,18 +653,108 @@ versus other developmental subtypes (by taking the inverse of the
 distance metric, then normalizing each cell so that its largest value is
 1).
 
-![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->
-
 ![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-17-1.png)<!-- -->
 
 ![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-18-1.png)<!-- -->
 
-From these plots, we can see that \_\_\_\_\_.
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-19-1.png)<!-- -->
+
+These plots are a bit hard to interpret, so we can walk through them
+step by step.
+
+  - Each circle represents a single developmental subpopulation that
+    came out of our classifier.
+  - On each circle, the different points represent the “similarity” (aka
+    the inverse of distance) that each cell type has to each healthy
+    cell type, on average. For each circle, these values are normalized
+    such that the maximum similarity has a value of 1 in each circle.
+  - In one way of thinking about it, we could think of our classifier as
+    wanting to minimize the total shaded area across all circles in the
+    dataset: the more area there is on any given circle, the more
+    “ambiguous” that cell type is and the harder it will be to
+    classify correctly.
+
+With these bullets in mind, we can interpret the plots for each distance
+with a few observations:
+
+  - With respect to our manually-gated myeloid populations, there’s
+    ambiguity in pretty much all of the subpopulations for all distance
+    metrics.
+  - That being said, the Mahalanobis distance seems to minimize the
+    uncertainty better than the other two metrics.
 
 We can also make similar plots with the marker measurements themselves
-rather than the distance metrics:
+rather than the distance metrics. In this case, the mean value for each
+marker is plotted along its radial axis.
 
-![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-19-1.png)<!-- -->
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-20-1.png)<!-- -->
+
+From these plots, we can see that some subpopulations (for example, MPP
+and MEP) are only distinguished from other clusters with markers that
+are expressed at relatively low levels compared to other markers, which
+may make them harder to classify accurately. I’m still starting at this
+to try to wrap my head around it.
+
+To help illustrate this, here are a few example histograms created with
+the function `tof_histogram()`. These are some of the markers that, in
+theory, help to differentiate some of the early myeloid progenitors from
+one another, but we can see that they have very low expression levels
+overall compared to some of the higher-expressed markers like CD34.
+
+``` r
+aml_data %>% 
+  tof_histogram(
+    channel_var = `HLA-DR`, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+```
+
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-21-1.png)<!-- -->
+
+``` r
+aml_data %>% 
+  tof_histogram(
+    channel_var = CD41, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+```
+
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-21-2.png)<!-- -->
+
+``` r
+aml_data %>% 
+  tof_histogram(
+    channel_var = CD135, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+```
+
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-21-3.png)<!-- -->
+
+``` r
+aml_data %>% 
+  tof_histogram(
+    channel_var = CD45RA, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+```
+
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-21-4.png)<!-- -->
+
+``` r
+aml_data %>% 
+  tof_histogram(
+    channel_var = CD34, 
+    group_var = mahalanobis_cluster, 
+    ordered = FALSE
+  )
+```
+
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-21-5.png)<!-- -->
 
 ### Using different clustering methods
 
@@ -587,63 +762,25 @@ So, what happens if we don’t want to (or can’t) manually-gate our
 populations of interest? Luckily, `tidyTOF` is built with “modular
 code,” which means that it is very flexible. Suppose we are interested
 in classifying our cancer cells into FlowSOM clusters instead of
-manually-gated clusters. For this, we simply use the function \_\_\_ and
-then apply the classifier from there.
+manually-gated clusters. For this, we simply use the function
+`tof_cluster_flowSOM()` and then apply the classifier from there.
 
-``` r
-tof_cluster_flowSOM <- 
-  function(
-    tof_tibble = NULL, 
-    clustering_markers = NULL, 
-    num_clusters = 20
-  ) {
-    my_FSO <- 
-      list(
-        data = 
-          tof_tibble %>% 
-          select(all_of(clustering_markers)) %>% 
-          data.matrix(), 
-        compensate = FALSE, 
-        spillover = NULL, 
-        transform = FALSE, 
-        scale = NULL, 
-        prettyColnames = clustering_markers
-      )
-    
-    my_SOM <- 
-      BuildSOM(
-        fsom = my_FSO, 
-        colsToUse = clustering_markers
-      )
-    
-    #my_clusters <- my_SOM$map$mapping[,1]
-    
-    my_MST <- BuildMST(my_SOM, tSNE = FALSE)
-    
-    flowSOM_metacluster_object <- 
-      MetaClustering(
-        data = my_MST$map$codes, 
-        method = "metaClustering_consensus", 
-        nClus = num_clusters
-      )
-    
-    flowSOM_metaclusters <- 
-      flowSOM_metacluster_object[my_MST$map$mapping[,1]] %>% 
-      as.character()
-    
-    return(flowSOM_metaclusters)
-  }
-```
+We cluster using the surface markers in our dataset and ask for 20
+clusters to be returned.
 
 ``` r
 flowSOM_clusters <- 
   gated_data %>% 
-  tof_cluster_flowSOM(clustering_markers = SURFACE_MARKERS)
+  tof_cluster_flowSOM(clustering_markers = SURFACE_MARKERS, num_clusters = 20)
 
 gated_data <- 
   gated_data %>% 
   mutate(flowSOM_clusters = flowSOM_clusters)
 ```
+
+With these clusters in hand, we can then painlessly apply the classifier
+using the flowSOM-identified clusters rather than manually-identified
+ones with just a few lines of code.
 
 ``` r
 flowSOM_mahal_classifications <- 
@@ -674,80 +811,33 @@ flowSOM_cosine_classifications <-
   )
 ```
 
-``` r
-radar_distance_mahalanobis <- 
-  flowSOM_mahal_classifications %>% 
-  rename_with(
-    ~ str_remove(.x, "mahalanobis_")
-  ) %>% 
-  rowwise() %>% 
-  mutate(row_sum = sum(c_across(-cluster))) %>% 
-  ungroup() %>% 
-  mutate(cluster = factor(cluster, levels = as.character(1:20))) %>% 
-  mutate(across(c(-cluster, -row_sum), function(x) (row_sum/x))) %>% 
-  select(-row_sum) %>% 
-  mutate(row_max = pmax(!!!syms(str_sub(as.character(1:20), end = 7L)))) %>% 
-  mutate(across(c(-cluster, -row_max), function(x) x/row_max)) %>% 
-  select(-row_max)
-         
-
-radar_distance_mahalanobis %>% 
-  ggRadar(
-    mapping = aes(group = cluster), 
-    legend.position = "none", 
-    rescale = FALSE
-    #scales = "free"
-    ) + 
-  facet_wrap(facets = vars(cluster)) + 
-  scale_y_discrete(breaks = NULL) + 
-  scale_fill_tableau(palette = "Tableau 20") + 
-  scale_color_tableau("Tableau 20") + 
-  theme_minimal() + 
-  theme(legend.position = "none") + 
-  labs(
-    subtitle = "Mahalanobis cluster features",
-    fill = NULL, 
-    color = NULL
-  )
-```
-
-![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-23-1.png)<!-- -->
-
-``` r
-radar_distance_cosine <- 
-  flowSOM_cosine_classifications %>% 
-  rename_with(
-    ~ str_remove(.x, "cosine_")
-  ) %>% 
-  rowwise() %>% 
-  mutate(row_sum = sum(c_across(-cluster))) %>% 
-  ungroup() %>% 
-  mutate(cluster = factor(cluster, levels = as.character(1:20))) %>% 
-  mutate(across(c(-cluster, -row_sum), function(x) (row_sum/x))) %>% 
-  select(-row_sum) %>% 
-  mutate(row_max = pmax(!!!syms(str_sub(as.character(1:20), end = 7L)))) %>% 
-  mutate(across(c(-cluster, -row_max), function(x) x/row_max)) %>% 
-  select(-row_max)
-         
-
-radar_distance_cosine %>% 
-  ggRadar(
-    mapping = aes(group = cluster), 
-    legend.position = "none", 
-    rescale = FALSE
-    #scales = "free"
-    ) + 
-  facet_wrap(facets = vars(cluster)) + 
-  scale_y_discrete(breaks = NULL) + 
-  scale_fill_tableau(palette = "Tableau 20") + 
-  scale_color_tableau("Tableau 20") + 
-  theme_minimal() + 
-  theme(legend.position = "none") + 
-  labs(
-    subtitle = "Cosine cluster features",
-    fill = NULL, 
-    color = NULL
-  )
-```
+And we then visualize with radar plots as before to see how “ambiguous”
+these clusters are…
 
 ![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-24-1.png)<!-- -->
+
+![](aml_classifier_vignette_files/figure-gfm/unnamed-chunk-25-1.png)<!-- -->
+
+From these plots, we can maybe convince ourselves that adding more
+clusters to our workflow has the effect of leading to more sharp
+“spikes” in similarity for one or a small number of clusters using
+our classifier on the AML dataset. Further analyses down this same line
+of reasoning will interrogate the protein-level features of each flowSOM
+cluster as well as how they differ between cancer/healthy (and which
+healthy clusters distribute into which flowSOM clusters).
+
+This is just meant to illustrate some of the power and convenience of
+packaging these types of analyses in a tidy way, as doing so can make
+reproducible, highly-iterative analyses doable with relative ease. More
+functions and AML-specific analyses are incoming as the modeling
+components of {tidyTOF} take shape.
+
+## Future Directions
+
+  - Implement several other unbiased clustering methods in {tidyTOF}
+  - Finish implementing `tof_dim_reduce()`: a function for performing
+    PCA, tSNE, and UMAP.
+  - Implement explicit modeling capability in {tidyTOF}
+      - GLMs (next week)
+      - NNs (end of July/first week of August)
+  - Finalize ability to write out .fcs files accurately (this weekend).
