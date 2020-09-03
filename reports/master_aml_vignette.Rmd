@@ -1,6 +1,6 @@
 ---
 title: "Master AML Vignette"
-author: 
+author: tkeyes
 date: "`r Sys.Date()`"
 output: 
   github_document:
@@ -21,6 +21,8 @@ library(rlang)
 library(ggthemes)
 library(DataExplorer)
 library(ComplexHeatmap)
+library(foreach)
+library(parallel)
 
 # Parameters
 source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
@@ -509,12 +511,12 @@ surface_plots <-
 surface_plots %>% 
   walk(print)
 
-legend <- surface_plots[[1]] %>% get_legend()
-
-surface_plots[1:9] %>% 
-  map(~ . + theme(legend.position = "none")) %>% 
-  plot_grid(plotlist = ., align = "vh", ncol = 3) %>% 
-  plot_grid(., legend, nrow = 1, rel_widths = c(3, 0.3))
+# legend <- surface_plots[[1]] %>% get_legend()
+# 
+# surface_plots[1:9] %>% 
+#   map(~ . + theme(legend.position = "none")) %>% 
+#   plot_grid(plotlist = ., align = "vh", ncol = 3) %>% 
+#   plot_grid(., legend, nrow = 1, rel_widths = c(3, 0.3))
 
 ```
 
