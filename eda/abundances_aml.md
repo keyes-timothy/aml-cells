@@ -1,6 +1,6 @@
 Abundances EDA
 ================
-2020-03-12
+2020-09-04
 
   - [Read in data](#read-in-data)
   - [Wrangle data](#wrangle-data)
@@ -13,7 +13,22 @@ library(rlang)
 
 # Parameters
 
-data_path <- file.path("~", "Box", "Tim", "Lab", "SL_root_simulation", "home", "groups", "kardavis", "Tim", "results", "data", "AML_matrix_clustered.RData")
+data_path <- 
+  file.path(
+    "~", 
+    "Box", 
+    "Tim", 
+    "Lab", 
+    "SL_root_simulation", 
+    "home", 
+    "groups", 
+    "kardavis", 
+    "Tim", 
+    "results", 
+    "data", 
+    "AML_matrix_clustered.RData"
+  )
+
 cluster_column <- "Mah.cluster"
 plot_out_path <- file.path("~", "Desktop", "new_plots")
 
@@ -124,12 +139,20 @@ glimpse(clustered_data)
 
 ## Wrangle data
 
+Calculate proportion of each develpomental cluster in each sample and
+condition (Diagnostic, Relapse, Healthy), then find the average and SEM
+across all samples.
+
 ``` r
 sample_size <- 
   clustered_data %>% 
   group_by(condition) %>% 
   summarize(group_size = n_distinct(patient))
+```
 
+    ## `summarise()` ungrouping output (override with `.groups` argument)
+
+``` r
 abundances <- 
   clustered_data %>% 
   group_by_at(vars(one_of(metadata, cluster_column))) %>% 
@@ -142,7 +165,13 @@ abundances <-
     sem = sd(cell_prop) / sqrt(group_size), 
     cell_prop = mean(cell_prop), 
   )
+```
 
+    ## `summarise()` regrouping output by 'patient', 'condition' (override with `.groups` argument)
+
+    ## `summarise()` regrouping output by 'condition' (override with `.groups` argument)
+
+``` r
 abundances
 ```
 
