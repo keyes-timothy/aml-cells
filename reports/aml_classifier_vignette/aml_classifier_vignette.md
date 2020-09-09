@@ -1,7 +1,7 @@
 AML Classifier Vignette
 ================
 tkeyes
-2020-07-10
+2020-09-08
 
   - [Read in and preprocess AML/healthy
     data](#read-in-and-preprocess-amlhealthy-data)
@@ -73,7 +73,7 @@ aml_data <-
 # and we also read the gated data from raw .fcs files...
 gated_data <- 
   here::here("data-raw", "healthy_data") %>% #the file path for the gated data
-  tof_read_fcs(folder_path = .) %>%  #read in everything in the folder
+  tof_read_fcs(file_path = .) %>%  #read in everything in the folder
   tof_preprocess() #preprocess with default settings
 ```
 

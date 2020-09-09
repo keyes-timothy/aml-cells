@@ -65,7 +65,7 @@ aml_data <-
 # and we also read the gated data from raw .fcs files...
 gated_data <- 
   here::here("data-raw", "healthy_data") %>% #the file path for the gated data
-  tof_read_fcs(folder_path = .) %>%  #read in everything in the folder
+  tof_read_fcs(file_path = .) %>%  #read in everything in the folder
   tof_preprocess() #preprocess with default settings
 ```
 
