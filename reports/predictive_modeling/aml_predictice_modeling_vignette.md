@@ -247,16 +247,16 @@ prediction_table
     ## # A tibble: 100 x 2
     ##    penalty percent_correct
     ##      <dbl>           <dbl>
-    ##  1 0.00624              80
-    ##  2 0.00654              80
-    ##  3 0.00685              80
-    ##  4 0.00718              80
-    ##  5 0.00752              80
-    ##  6 0.00788              80
-    ##  7 0.00825              80
-    ##  8 0.00864              80
-    ##  9 0.00905              80
-    ## 10 0.00949              80
+    ##  1 0.00664              80
+    ##  2 0.00696              80
+    ##  3 0.00729              80
+    ##  4 0.00764              80
+    ##  5 0.00800              80
+    ##  6 0.00838              80
+    ##  7 0.00878              80
+    ##  8 0.00920              80
+    ##  9 0.00964              80
+    ## 10 0.0101               80
     ## # … with 90 more rows
 
 ``` r
@@ -283,17 +283,29 @@ mah_ddpr_fit %>%
   as.matrix() %>% 
   as_tibble(rownames = "marker_name") %>% 
   rename(coefficient = `1`) %>% 
-  filter(coefficient > 0)
+  filter(coefficient > 0.000000000000)
 ```
 
-    ## # A tibble: 5 x 2
-    ##   marker_name           coefficient
-    ##   <chr>                       <dbl>
-    ## 1 HSC_Basal_pS6             0.0769 
-    ## 2 Monocyte_Basal_pS6        0.00181
-    ## 3 Thrombocyte_Basal_pS6     0.0635 
-    ## 4 HSC_GMCSF_pS6             0.539  
-    ## 5 Monocyte_IL3_pS6          0.135
+    ## # A tibble: 17 x 2
+    ##    marker_name           coefficient
+    ##    <chr>                       <dbl>
+    ##  1 CMP_CD123                0.0108  
+    ##  2 MEP_CD33                 0.00981 
+    ##  3 MEP_CD123                0.0715  
+    ##  4 Monocyte_CD123           0.182   
+    ##  5 MPP_CD123                0.0508  
+    ##  6 Thrombocyte_CD33         0.000647
+    ##  7 Thrombocyte_CD123        0.00734 
+    ##  8 HSC_Basal_pS6            0.119   
+    ##  9 HSC_Basal_pSTAT5         0.0630  
+    ## 10 Monocyte_Basal_pAkt      0.0127  
+    ## 11 Monocyte_Basal_pS6       0.224   
+    ## 12 HSC_GMCSF_pS6            1.14    
+    ## 13 HSC_IL6_pS6              0.488   
+    ## 14 Monocyte_GMCSF_pS6       0.359   
+    ## 15 Monocyte_IL3_pS6         0.474   
+    ## 16 Thrombocyte_IL6_pS6      0.406   
+    ## 17 Thrombocyte_abundance    9.57
 
 # CITRUS features Elastic Net Model
 

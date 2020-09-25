@@ -257,7 +257,7 @@ mah_ddpr_fit %>%
   as.matrix() %>% 
   as_tibble(rownames = "marker_name") %>% 
   rename(coefficient = `1`) %>% 
-  filter(coefficient > 0)
+  filter(coefficient > 0.000000000000)
 
 ```
 
