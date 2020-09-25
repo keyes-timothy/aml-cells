@@ -38,10 +38,12 @@ call_libraries(libraries)
 
 # Parameters
 set_global_variables(locale = "galaxia")
-
-tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
 is_sampled <- TRUE
+
+# Paths
+tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
 md_path <- here::here("data-raw", "AML_metadata.xlsx")
+all_path <- here::here()
 
 # Sourcing tidyTOF functions
 source_tidyTOF(tidyTOF_directory)
@@ -57,14 +59,14 @@ patient_setup()
 First, we want to read in our `aml_data` and the data from our healthy, manually-gated cells (`gated_data`). 
 
 ```{r}
-# we read in some data that was previously processed 
+# we read in aml data that's already pre-processed 
 aml_data <- 
   file.path(DATA_DIRECTORY, "sampled_aml_data_p.rds") %>% 
   read_rds()
 
 # and we also read the gated data from raw .fcs files...
 gated_data <- 
-  here::here("data-raw", "healthy_data") %>% #the file path for the gated data
+  here::here("data-raw", "healthy_myeloid") %>% #the file path for the gated data
   tof_read_fcs(file_path = .) %>%  #read in everything in the folder
   tof_preprocess() #preprocess with default settings
 ```

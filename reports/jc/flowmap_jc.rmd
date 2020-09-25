@@ -1,0 +1,274 @@
+---
+title: "FLOWMAP JC"
+author: tkeyes
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+libraries <- 
+  c(
+    "flowCore", 
+    "tidyverse", 
+    "readxl", 
+    "rlang", 
+    "ggthemes", 
+    "foreach", 
+    "doParallel", 
+    "FlowSOM",
+    "FLOWMAPR"
+  )
+
+source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
+call_libraries(libraries)
+
+# Parameters
+tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
+
+data_path <- file.path("~", "Box", "Tim", "Lab", "Data", "MRD_timecourse_files", "MRD_01")
+
+# Sourcing tidyTOF functions
+source_tidyTOF(tidyTOF_directory)
+```
+
+## Reading in data
+
+
+```{r, results = 'hide', error = FALSE, message = FALSE, warning = FALSE}
+mrd_data <- 
+  data_path %>% 
+  tof_read_fcs() %>% 
+  select(contains("_"), -Event_length) %>% 
+  tof_preprocess() %>% 
+  slice_sample(prop = 0.05)
+```
+
+
+```{r}
+split_names <- 
+  mrd_data %>% 
+  pull(file_names) %>% 
+  str_split(pattern = "_") %>% 
+  transpose()
+
+mrd_data <- 
+  mrd_data %>% 
+  mutate(
+    timepoint = split_names[[4]] %>% as.character(), 
+    stimulation = str_remove(split_names[[5]], ".fcs")
+  ) %>% 
+  filter(!(timepoint %in% c("Dx", "Rx"))) %>%
+  filter(stimulation == "basal")
+```
+
+```{r}
+mrd_data
+```
+
+```{r}
+mrd_data %>% 
+  count(stimulation, timepoint)
+```
+
+
+
+```{r}
+mrd_single <- 
+  mrd_data %>% 
+  select(-stimulation) %>% 
+  group_by(timepoint) %>% 
+  nest() %>% 
+  ungroup() %>% 
+  mutate(
+    data = 
+      map2(
+        .x = data, 
+        .y = timepoint, 
+        .f = ~ mutate(.x, timepoint = .y) %>% as.data.frame()
+      )
+  )
+
+clustering.var <- 
+  c(
+    "115In_CD45",
+    "139La_cParp",
+    "141Pr_pSrc",
+    "142Nd_CD19",
+    "143Nd_CD22",
+    "144Nd_p4EBP1",
+    "145Nd_CD73",
+    "146Nd_CD66",
+    "147Sm_CD20",
+    "148Sm_CD34",
+    "149Sm_CD179a" 
+  )
+
+```
+
+```{r}
+flowmap_result <- 
+  FLOWMAPfromDF(
+    mode = "single", 
+    df = mrd_single$data, 
+    project.name = "single_mrd", 
+    clustering.var = clustering.var, 
+    distance.metric = "euclidean", 
+    minimum = 2,
+    maximum = 5,
+    time.col.label = "timepoint",  # this is right here
+    save.folder = here::here("reports", "jc", "flowmap"), 
+    clustering = TRUE, 
+    savePDFs = TRUE, 
+    cluster.numbers = 3000, 
+    cluster.mode = "kmeans"
+  )
+  
+```
+
+Okay, so we try adding these values outside of the function...
+
+```{r}
+time.col.label <- "timepoint"
+condition.col.label <- NULL
+clustering <- TRUE
+savePDFs <- TRUE
+cluster.numbers <- 3000
+cluster.mode <- "kmeans"
+maximum <- 5
+clustering.var <-
+  c(
+    "115In_CD45",
+    "139La_cParp",
+    "141Pr_pSrc",
+    "142Nd_CD19",
+    "143Nd_CD22",
+    "144Nd_p4EBP1",
+    "145Nd_CD73",
+    "146Nd_CD66",
+    "147Sm_CD20",
+    "148Sm_CD34",
+    "149Sm_CD179a"
+  )
+
+flowmap_result <- 
+  FLOWMAPfromDF(
+    mode = "single", 
+    df = mrd_single$data, 
+    project.name = "single_mrd", 
+    clustering.var = clustering.var, 
+    distance.metric = "euclidean", 
+    minimum = 2,
+    maximum = 5,
+    time.col.label = time.col.label,
+    save.folder = here::here("reports", "jc", "flowmap"), 
+    clustering = FALSE, 
+    savePDFs = TRUE, 
+    cluster.numbers = 3000, 
+    cluster.mode = "hclust"
+  )
+```
+
+
+
+```{r}
+myMakeOutFolder <- 
+  function (runtype, maximum = 5, minimum = 2, k = "") 
+  {
+    name <- gsub(" ", "_", Sys.time(), fixed = TRUE)
+    name <- gsub(":", ".", name, fixed = TRUE)
+    output.folder <- paste("max", maximum, "_k", k, name, runtype, 
+                           "run", sep = "_")
+    print(output.folder)
+    dir.create(output.folder)
+    cat("output.folder is", output.folder, "\n")
+    return(output.folder)
+  }
+
+
+environment(myMakeOutFolder) <- asNamespace("FLOWMAPR")
+assignInNamespace("MakeOutFolder", myMakeOutFolder, ns = "FLOWMAPR")
+```
+
+
+```{r}
+mode <- "single"
+save.folder <- here::here("reports", "jc", "flowmap")
+project.name <- "Example_FLOWMAP_Run"
+clustering.var <- clustering.var
+distance.metric <- "euclidean"
+k <- 5
+minimum <- 2
+maximum <- 5
+seed.X <- 1
+name.sort <- FALSE
+clustering <- FALSE
+savePDFs <- TRUE
+which.palette <- "bluered"
+
+time.col.label <- "timepoint"
+condition.col.label <- NULL
+
+df <- mrd_single$data
+
+FLOWMAPR::FLOWMAPfromDF(
+  mode = mode, 
+  df = df, 
+  project.name = project.name,
+                        
+  time.col.label = time.col.label, 
+  condition.col.label = condition.col.label,
+                        
+  clustering.var = clustering.var, 
+  distance.metric = distance.metric,
+                        
+  minimum = minimum, 
+  maximum = maximum, 
+  save.folder = save.folder,
+                        
+  name.sort = name.sort, 
+  clustering = clustering, 
+  cluster.numbers = 100, 
+  cluster.mode = "hclust",
+  seed.X = seed.X, 
+  savePDFs = savePDFs, 
+  which.palette = which.palette
+)
+```
+
+
+```{r}
+seed.X <- 1
+files <- data_path
+name.sort <- FALSE
+mode <- "single"
+save.folder <- here::here("reports", "jc", "flowmap")
+clustering.var <- c("142Nd", "163Dy", "168Er")
+var.annotate <- setNames(object = as.list(clustering.var), clustering.var)
+var.remove <- c()
+downsample <- FALSE
+subsamples <- 200
+cluster.numbers <- 200
+distance.metric <- "euclidean"
+k <- 5
+minimum <- 2
+maximum <- 5
+graph.out <- 'UMAP'
+savePDFs <- TRUE
+which.palette <- "bluered"
+
+FLOWMAPR::FLOWMAP(mode = mode, files = files, var.remove = var.remove, var.annotate = var.annotate,
+                  clustering.var = clustering.var, cluster.numbers = cluster.numbers,
+                  distance.metric = distance.metric, minimum = minimum, maximum = maximum,
+                  save.folder = save.folder, subsamples = subsamples, k = k, graph.out = graph.out,
+                  name.sort = name.sort, downsample = downsample, seed.X = seed.X,
+                  savePDFs = savePDFs, which.palette = which.palette)
+```
+
+

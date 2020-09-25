@@ -1,5 +1,5 @@
 ---
-title: "Master AML Vignette"
+title: "Intro AML Vignette"
 author: tkeyes
 date: "`r Sys.Date()`"
 output: 
@@ -8,8 +8,12 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(echo = TRUE, dpi = 300)
 ```
+
+# Executive Summary 
+
+In this vignette, we read in and preprocess AML data from .fcs files. We also provide the option to make histograms representing the number of cells from each sample and their marker expression values. 
 
 ```{r libraries-and-params, message=FALSE, warning=FALSE}
 # Libraries
@@ -29,14 +33,18 @@ source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg
 set_global_variables(locale = "galaxia")
 
 tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
-is_sampled <- TRUE
 md_path <- here::here("data-raw", "AML_metadata.xlsx")
 
 # Sourcing tidyTOF functions
 source_tidyTOF(tidyTOF_directory)
 
+# set up aml marker and patient information
 marker_setup()
 patient_setup()
+
+# globals for running different parts of this vignette
+is_sampled <- TRUE
+generate_histograms <- FALSE #if yes, will generate many histograms for each marker
 
 ```
 
@@ -50,6 +58,9 @@ md <-
     Patient = Patient %>% str_to_lower()
   ) %>% 
   janitor::clean_names(case = "snake")
+
+md %>% 
+  write_rds(path = here::here("data", "md.rds"))
 ```
 
 
@@ -58,7 +69,7 @@ md <-
 ### From scratch 
 
 ```{r raw-read-single-cell, read-raw-data, eval = FALSE}
-source(file.path(CODE_DIRECTORY, "aml_read_data.R"))
+source(file.path(CODE_DIRECTORY, "io", "aml_read_data.R"))
 ```
 
 ### From .rds file
@@ -67,7 +78,7 @@ source(file.path(CODE_DIRECTORY, "aml_read_data.R"))
 data_path <- 
   file.path(
     DATA_DIRECTORY, 
-    if_else(is_sampled, "raw_aml_tibble_sampled.rds", "raw_aml_tibble.rds")
+    if_else(!is_sampled, "aml_data_raw.rds", "aml_data_raw_sampled.rds")
   )
 
 aml_data <- 
@@ -131,10 +142,11 @@ print(
 )
 ```
 
-And we can see that there are some patients that included in the metadata that we have no single-cell data
-for and that we have no metadata for the 4 healthy samples (the names that take the form `bm####`). 
+And we can see that there are some patients that included in the metadata that we have no single-cell data for. We also see that we have no metadata for the 4 healthy samples (the names that take the form `bm####`), which is expected. 
 
 ### Pre-process
+
+Using `tof_preprocess()`, we can easily preprocess the data using several different procedures. 
 
 With arcsinh transformation and removal of added noise: 
 ```{r preprocess-1}
@@ -166,7 +178,7 @@ aml_data_r <-
 ```
 
 
-Save pre-processed data
+We can then save our pre-processed data. In the saved files, 'p' indicates standard preprocessing with the arcsinh transformation, 's' indicates scaling, and 'r' indicates the rank transformation. 
 
 ```{r save-preprocessed-data}
 ls() %>% 
@@ -213,10 +225,9 @@ discrete_bars <-
   labs(y = "Number of cells")
 ```
 
+Correlation matrix for all protein measurements: 
 
-Histograms for all marker channels: 
-
-```{r}
+```{r corr-matrix-euclidean}
 plot_channels <- 
   aml_data_p %>%
   summarize(across(one_of(ALL_MARKERS), mean)) %>% 
@@ -224,14 +235,6 @@ plot_channels <-
   arrange(desc(mean)) %>% 
   pull(channel)
 
-aml_data_p %>% 
-  select(one_of(plot_channels)) %>%
-  plot_histogram(geom_histogram_args = list(bins = 40L))
-```
-
-Correlation matrix for all protein measurements: 
-
-```{r corr-matrix-euclidean}
 aml_data_p %>% 
   select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
   cor() %>% 
@@ -290,6 +293,7 @@ aml_data_p %>%
 ```{r cell-number-plate}
 aml_data %>% 
   count(plate) %>% 
+  arrange(desc(n)) %>% 
   knitr::kable()
 ```
 
@@ -314,51 +318,53 @@ aml_data %>%
 #### Univariate histograms
 
 ```{r histograms-plate-plot, eval = FALSE}
-aml_data_p %>% 
-  tof_plot_all_histograms(
-    group_var = plate, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"),  
-    label_suffix = "hist_by_plate.pdf", 
-    width = 6,
-    height = 10,
-    device = "pdf"
-  )
-
-aml_data_p %>% 
-  filter(condition == "healthy") %>% 
-  tof_plot_all_histograms(
-    group_var = plate, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p_healthy"), 
-    label_suffix = "hist_by_plate.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf"
-  )
-
-aml_data_ps %>% 
-  tof_plot_all_histograms(
-    group_var = plate, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
-    label_suffix = "hist_by_plate.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf"
-  )
-
-aml_data_ps %>% 
-  filter(condition == "healthy") %>% 
-  tof_plot_all_histograms(
-    group_var = plate, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps_healthy"), 
-    label_suffix = "hist_by_plate.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf"
-  )
+if (generate_histograms) {
+  aml_data_p %>% 
+    tof_plot_all_histograms(
+      group_var = plate, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"),  
+      label_suffix = "hist_by_plate.pdf", 
+      width = 6,
+      height = 10,
+      device = "pdf"
+    )
+  
+  aml_data_p %>% 
+    filter(condition == "healthy") %>% 
+    tof_plot_all_histograms(
+      group_var = plate, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p_healthy"), 
+      label_suffix = "hist_by_plate.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf"
+    )
+  
+  aml_data_ps %>% 
+    tof_plot_all_histograms(
+      group_var = plate, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
+      label_suffix = "hist_by_plate.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf"
+    )
+  
+  aml_data_ps %>% 
+    filter(condition == "healthy") %>% 
+    tof_plot_all_histograms(
+      group_var = plate, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps_healthy"), 
+      label_suffix = "hist_by_plate.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf"
+    )
+}
 
 ```
 
@@ -412,12 +418,12 @@ aml_data %>%
 
 ```{r cell-number-patient-density}
 aml_data %>% 
-  count(patient) %>% 
+  count(patient) %>%
   ggplot(aes(x = n)) + 
   geom_density() + 
   geom_point(aes(x = n, y = 0), size = 3, shape = "|") + 
   scale_x_continuous(
-    labels = scales::label_number(accuracy = 1, scale = 1e-3, suffix = "K")
+    labels = scales::label_number(accuracy = 1, scale = 1e-6, suffix = "M")
   ) +
   scale_y_continuous() + 
   labs(
@@ -430,32 +436,32 @@ aml_data %>%
 
 #### Univariate histograms
 ```{r histograms-patient, eval = FALSE}
-
-aml_data_p %>% 
-  tof_plot_all_histograms(
-    group_var = patient, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"), 
-    label_suffix = "hist_by_patient.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf",
-    ordered = TRUE
-  )
-
-
-aml_data_ps %>% 
-  tof_plot_all_histograms(
-    group_var = patient, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
-    label_suffix = "hist_by_patient.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf", 
-    ordered = TRUE
-  )
-
+if (generate_histograms) { 
+  aml_data_p %>% 
+    tof_plot_all_histograms(
+      group_var = patient, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"), 
+      label_suffix = "hist_by_patient.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf",
+      ordered = TRUE
+    )
+  
+  
+  aml_data_ps %>% 
+    tof_plot_all_histograms(
+      group_var = patient, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
+      label_suffix = "hist_by_patient.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf", 
+      ordered = TRUE
+    )
+}
 ```
 
 
@@ -471,7 +477,7 @@ aml_data %>%
 
 #### Univariate histograms
 
-```{r signaling-condition-density-plots, message = FALSE, warning = FALSE}
+```{r signaling-condition-density-plots, message = FALSE, warning = FALSE, eval = FALSE}
 SIGNALING_MARKERS %>% 
   syms() %>% 
   map(
@@ -492,25 +498,27 @@ SIGNALING_MARKERS %>%
 ### By stimulation (surface)
 
 ```{r, warning = FALSE, message = FALSE}
-surface_plots <- 
-  SURFACE_MARKERS %>% 
-  syms() %>% 
-  map(
-    ~ 
-      tof_histogram_2(
-        aml_data_p, 
-        channel_var = !!., 
-        group_var = patient, 
-        split_var = stimulation, 
-        alpha = 0.5,
-        ordered = TRUE,
-        panel_scaling = FALSE
-      ) 
-  )
-
-surface_plots %>% 
-  walk(print)
-
+if (generate_histograms) { 
+  surface_plots <- 
+    SURFACE_MARKERS %>% 
+    syms() %>% 
+    map(
+      ~ 
+        tof_histogram_2(
+          aml_data_p, 
+          channel_var = !!., 
+          group_var = patient, 
+          split_var = stimulation, 
+          alpha = 0.5,
+          ordered = TRUE,
+          panel_scaling = FALSE
+        ) 
+    )
+  
+  surface_plots %>% 
+    walk(print)
+  
+}
 # legend <- surface_plots[[1]] %>% get_legend()
 # 
 # surface_plots[1:9] %>% 
@@ -533,65 +541,72 @@ aml_data %>%
 #### Univariate histograms
 
 ```{r}
-aml_data_p %>% 
-  tof_histogram(channel_var = CD45, group_var = stimulation, ordered = TRUE)
-
-aml_data_p %>% 
-  tof_plot_all_histograms(
-    group_var = stimulation, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"), 
-    label_suffix = "hist_by_stim.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf",
-    ordered = TRUE
-  )
-
-aml_data_p %>% 
-  filter(condition == "healthy") %>% 
-  tof_plot_all_histograms(
-    group_var = stimulation, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-    label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p_healthy"), 
-    label_suffix = "hist_by_stim.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf"
-  )
-
-aml_data_ps %>% 
-  tof_plot_all_histograms(
-    group_var = stimulation, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-    label_prefix =  str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
-    label_suffix = "hist_by_stim.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf", 
-    ordered = TRUE
-  )
-
-aml_data_ps %>% 
-  filter(condition == "healthy") %>% 
-  tof_plot_all_histograms(
-    group_var = stimulation, 
-    out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-    label_prefix =  str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps_healthy"), 
-    label_suffix = "hist_by_stim.pdf", 
-    width = 6, 
-    height = 10,
-    device = "pdf"
-  )
+if (generate_histograms) {
+  
+  aml_data_p %>% 
+    tof_histogram(channel_var = CD45, group_var = stimulation, ordered = TRUE)
+  
+  aml_data_p %>% 
+    tof_plot_all_histograms(
+      group_var = stimulation, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"), 
+      label_suffix = "hist_by_stim.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf",
+      ordered = TRUE
+    )
+  
+  aml_data_p %>% 
+    filter(condition == "healthy") %>% 
+    tof_plot_all_histograms(
+      group_var = stimulation, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
+      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p_healthy"), 
+      label_suffix = "hist_by_stim.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf"
+    )
+  
+  aml_data_ps %>% 
+    tof_plot_all_histograms(
+      group_var = stimulation, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+      label_prefix =  str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
+      label_suffix = "hist_by_stim.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf", 
+      ordered = TRUE
+    )
+  
+  aml_data_ps %>% 
+    filter(condition == "healthy") %>% 
+    tof_plot_all_histograms(
+      group_var = stimulation, 
+      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
+      label_prefix =  str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps_healthy"), 
+      label_suffix = "hist_by_stim.pdf", 
+      width = 6, 
+      height = 10,
+      device = "pdf"
+    )
+}
 ```
-
-
 
 ## Classifier 
 
 ```{r}
 
 ```
+
+## Clustering 
+
+## Feature extraction 
+
+## Modeling
 
 ## Dimensionality reduction
 

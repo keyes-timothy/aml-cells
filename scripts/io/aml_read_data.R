@@ -28,7 +28,7 @@ message("Reading in data...")
 
 my_data <- 
   RAW_DATA_DIRECTORY %>% 
-  tof_read_fcs(folder_path = .)
+  tof_read_fcs(file_path = .)
 
 ##########clean the data that was read in 
 message("Cleaning data...")
@@ -69,15 +69,15 @@ my_data <-
 
 message("Saving Files")
 
-#save a sampled version of the giant dataframe for testing locally 
+#save the giant dataframe to a local file 
 my_data %>% 
-  write_rds(path = file.path(DATA_DIRECTORY, "raw_aml_tibble.rds"))
+  write_rds(path = file.path(DATA_DIRECTORY, "aml_data_raw.rds"))
 
+#save a sampled version of the giant dataframe for testing locally 
 my_data %>% 
   group_by(file_names) %>% 
   slice_sample(prop = 0.1) %>% 
-  write_rds(path = file.path(DATA_DIRECTORY, "raw_aml_tibble_sampled.rds"))
-
+  write_rds(path = file.path(DATA_DIRECTORY, "aml_data_raw_sampled.rds"))
 
 ########provide some simple figures regarding the quality of the data
 
@@ -94,7 +94,7 @@ cell_counts_plot <-
     condition = factor(condition, levels = c("healthy", "dx", "rx"))
   ) %>% 
   ggplot(aes(x = patient, y = n, color = stimulation, shape = condition)) + 
-  geom_point(size = 3) + 
+  geom_point(size = 3, alpha = 0.7) + 
   scale_y_continuous(
     minor_breaks = NULL, 
     labels = scales::label_number(accuracy = 1, scale = 1/1e3, suffix = "K")
@@ -124,6 +124,9 @@ cell_counts_by_plate <-
   mutate(plate = factor(plate, levels = str_c("plate", 1:16))) %>% 
   ggplot(aes(x = plate, y = n)) + 
   geom_point(size = 3, alpha = 0.6) + 
+  scale_y_continuous(
+    labels = scales::label_number(accuracy = 1, scale = 1e-6, suffix = "M")
+  ) + 
   theme_minimal() + 
   theme(axis.text.x = element_text(angle = 60, hjust = 1, size = 9)) + 
   labs(
