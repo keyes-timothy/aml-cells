@@ -1,21 +1,37 @@
----
-title: "Intro AML Vignette"
-author: tkeyes
-date: "`r Sys.Date()`"
-output: 
-  github_document:
-    toc: true
----
+Intro AML Vignette
+================
+tkeyes
+2020-10-05
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, dpi = 300)
-```
+  - [Executive Summary](#executive-summary)
+      - [Read in metadata](#read-in-metadata)
+      - [Read in single-cell data](#read-in-single-cell-data)
+          - [From scratch](#from-scratch)
+          - [From .rds file](#from-.rds-file)
+          - [Compare metadata and single-cell
+            data](#compare-metadata-and-single-cell-data)
+          - [Pre-process](#pre-process)
+      - [Data quality and univariate
+        distributions](#data-quality-and-univariate-distributions)
+          - [Introduction to the data](#introduction-to-the-data)
+          - [By plate](#by-plate)
+          - [By patient](#by-patient)
+          - [By patient (comparing patients with both Dx and
+            Rx)](#by-patient-comparing-patients-with-both-dx-and-rx)
+          - [By stimulation (surface)](#by-stimulation-surface)
+      - [Classifier](#classifier)
+      - [Clustering](#clustering)
+      - [Feature extraction](#feature-extraction)
+      - [Modeling](#modeling)
+      - [Dimensionality reduction](#dimensionality-reduction)
 
-# Executive Summary 
+# Executive Summary
 
-In this vignette, we read in and preprocess AML data from .fcs files. We also provide the option to make histograms representing the number of cells from each sample and their marker expression values. 
+In this vignette, we read in and preprocess AML data from .fcs files. We
+also provide the option to make histograms representing the number of
+cells from each sample and their marker expression values.
 
-```{r libraries-and-params, message=FALSE, warning=FALSE}
+``` r
 # Libraries
 library(flowCore)
 library(tidyverse)
@@ -45,12 +61,11 @@ patient_setup()
 # globals for running different parts of this vignette
 is_sampled <- TRUE
 generate_histograms <- FALSE #if yes, will generate many histograms for each marker
-
 ```
 
 ## Read in metadata
 
-```{r read-metadata}
+``` r
 md <- 
   md_path %>% 
   read_excel() %>% 
@@ -63,18 +78,17 @@ md %>%
   write_rds(path = here::here("data", "md.rds"))
 ```
 
-
 ## Read in single-cell data
 
-### From scratch 
+### From scratch
 
-```{r raw-read-single-cell, read-raw-data, eval = FALSE}
+``` r
 source(file.path(CODE_DIRECTORY, "io", "aml_read_data.R"))
 ```
 
 ### From .rds file
 
-```{r rds-read-single-cell}
+``` r
 data_path <- 
   file.path(
     DATA_DIRECTORY, 
@@ -88,31 +102,36 @@ aml_data <-
   mutate(cell_id = as.character(1:n()))
 ```
 
-
 ### Compare metadata and single-cell data
 
-```{r compare-patient-names-pre}
+``` r
 print(
   str_glue(
     "Patients in MD but not in single-cell data: \n {my_patients} \n",
     my_patients = str_c(setdiff(md$patient,str_to_lower(aml_data$patient)), collapse = " ")
   )
 )
+```
 
+    ## Patients in MD but not in single-cell data: 
+    ##  pasbbe pasltf pasvpj patast patiak
 
+``` r
 print(
   str_glue(
     "Patients in single-cell data but not in MD: \n {my_patients} \n",
     my_patients = str_c(setdiff(str_to_lower(aml_data$patient), md$patient), collapse = " "), 
   )
 )
-
 ```
 
-Thus, we can see that several patients in the single-cell data set have to be renamed
-in order to match the metadata. 
+    ## Patients in single-cell data but not in MD: 
+    ##  bm5721 bm6631 bm6152 bm5871 pasbee pastrp
 
-```{r fix-patient-names}
+Thus, we can see that several patients in the single-cell data set have
+to be renamed in order to match the metadata.
+
+``` r
 aml_data <- 
   aml_data %>% 
   mutate(
@@ -123,17 +142,21 @@ aml_data <-
   )
 ```
 
+And now we check the names again…
 
-And now we check the names again... 
-```{r compare-patient-names-post}
+``` r
 print(
   str_glue(
     "Patients in MD but not in single-cell data: \n {my_patients} \n",
     my_patients = str_c(setdiff(md$patient,str_to_lower(aml_data$patient)), collapse = " ")
   )
 )
+```
 
+    ## Patients in MD but not in single-cell data: 
+    ##  pasltf pasvpj patast patiak
 
+``` r
 print(
   str_glue(
     "Patients in single-cell data but not in MD: \n {my_patients} \n",
@@ -142,22 +165,31 @@ print(
 )
 ```
 
-And we can see that there are some patients that included in the metadata that we have no single-cell data for. We also see that we have no metadata for the 4 healthy samples (the names that take the form `bm####`), which is expected. 
+    ## Patients in single-cell data but not in MD: 
+    ##  bm5721 bm6631 bm6152 bm5871
+
+And we can see that there are some patients that included in the
+metadata that we have no single-cell data for. We also see that we have
+no metadata for the 4 healthy samples (the names that take the form
+`bm####`), which is expected.
 
 ### Pre-process
 
-Using `tof_preprocess()`, we can easily preprocess the data using several different procedures. 
+Using `tof_preprocess()`, we can easily preprocess the data using
+several different procedures.
 
-With arcsinh transformation and removal of added noise: 
-```{r preprocess-1}
+With arcsinh transformation and removal of added noise:
+
+``` r
 aml_data_p <- 
   aml_data %>% 
   tof_preprocess()
 ```
 
-With arcsinh transformation and removal of added noise, plus scaling/centering: 
+With arcsinh transformation and removal of added noise, plus
+scaling/centering:
 
-```{r preprocess-2}
+``` r
 ps_fun <- function(x) { 
   x %>% 
     {asinh(x = ./5)} %>% 
@@ -170,17 +202,20 @@ aml_data_ps <-
   tof_preprocess(transform_fun = ps_fun)
 ```
 
-With removal of added noise and rank transformation (similar to "cytoDx"):
-```{r preprocess-3}
+With removal of added noise and rank transformation (similar to
+“cytoDx”):
+
+``` r
 aml_data_r <-
   aml_data %>%
   tof_preprocess(transform_fun = rank)
 ```
 
+We can then save our pre-processed data. In the saved files, ‘p’
+indicates standard preprocessing with the arcsinh transformation, ‘s’
+indicates scaling, and ‘r’ indicates the rank transformation.
 
-We can then save our pre-processed data. In the saved files, 'p' indicates standard preprocessing with the arcsinh transformation, 's' indicates scaling, and 'r' indicates the rank transformation. 
-
-```{r save-preprocessed-data}
+``` r
 ls() %>% 
   str_subset(pattern = "aml_data_.") %>% 
   walk(
@@ -195,18 +230,18 @@ ls() %>%
   )
 ```
 
-
 ## Data quality and univariate distributions
 
 ### Introduction to the data
 
-First, we use the `{{DataExplorer}}` package to get to know the data a bit. 
+First, we use the `{{DataExplorer}}` package to get to know the data a
+bit.
 
-```{r}
+``` r
 plot_str(aml_data)
 ```
 
-```{r}
+``` r
 introduce(aml_data) %>% 
   pivot_longer(
     cols = everything(), 
@@ -216,18 +251,36 @@ introduce(aml_data) %>%
   knitr::kable()
 ```
 
-Number of cells across all discrete features: 
+| dataset\_feature       |      value |
+| :--------------------- | ---------: |
+| rows                   |    2252598 |
+| columns                |         51 |
+| discrete\_columns      |          6 |
+| continuous\_columns    |         45 |
+| all\_missing\_columns  |          0 |
+| total\_missing\_values |          0 |
+| complete\_rows         |    2252598 |
+| total\_observations    |  114882498 |
+| memory\_usage          | 1036262920 |
 
-```{r}
+Number of cells across all discrete features:
+
+``` r
 discrete_bars <- 
   plot_bar(aml_data, ggtheme = theme_bw(), nrow = 2L, ncol = 2L, parallel = TRUE) %>% 
   `$`(page_1) + 
   labs(y = "Number of cells")
 ```
 
-Correlation matrix for all protein measurements: 
+    ## 2 columns ignored with more than 50 categories.
+    ## file_names: 280 categories
+    ## cell_id: 2252598 categories
 
-```{r corr-matrix-euclidean}
+![](aml_intro_vignette_files/figure-gfm/unnamed-chunk-3-1.png)<!-- -->
+
+Correlation matrix for all protein measurements:
+
+``` r
 plot_channels <- 
   aml_data_p %>%
   summarize(across(one_of(ALL_MARKERS), mean)) %>% 
@@ -250,7 +303,9 @@ aml_data_p %>%
   )
 ```
 
-```{r corr-matrix-pearson}
+![](aml_intro_vignette_files/figure-gfm/corr-matrix-euclidean-1.png)<!-- -->
+
+``` r
 aml_data_p %>% 
   select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
   cor() %>% 
@@ -268,7 +323,9 @@ aml_data_p %>%
   )
 ```
 
-```{r corr-matrix-manhattan}
+![](aml_intro_vignette_files/figure-gfm/corr-matrix-pearson-1.png)<!-- -->
+
+``` r
 aml_data_p %>% 
   select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
   cor() %>% 
@@ -286,18 +343,37 @@ aml_data_p %>%
   )
 ```
 
+![](aml_intro_vignette_files/figure-gfm/corr-matrix-manhattan-1.png)<!-- -->
+
 ### By plate
 
 #### Number of cells
 
-```{r cell-number-plate}
+``` r
 aml_data %>% 
   count(plate) %>% 
   arrange(desc(n)) %>% 
   knitr::kable()
 ```
 
-```{r cell-number-plate-density}
+| plate   |      n |
+| :------ | -----: |
+| plate4  | 325311 |
+| plate1  | 296185 |
+| plate8  | 266811 |
+| plate10 | 251265 |
+| plate15 | 241653 |
+| plate6  | 216484 |
+| plate5  | 146190 |
+| plate2  | 108977 |
+| plate16 |  95298 |
+| plate7  |  70029 |
+| plate13 |  59715 |
+| plate12 |  58654 |
+| plate9  |  58412 |
+| plate3  |  57614 |
+
+``` r
 aml_data %>% 
   count(plate) %>% 
   ggplot(aes(x = n)) + 
@@ -315,9 +391,11 @@ aml_data %>%
   )
 ```
 
+![](aml_intro_vignette_files/figure-gfm/cell-number-plate-density-1.png)<!-- -->
+
 #### Univariate histograms
 
-```{r histograms-plate-plot, eval = FALSE}
+``` r
 if (generate_histograms) {
   aml_data_p %>% 
     tof_plot_all_histograms(
@@ -365,12 +443,11 @@ if (generate_histograms) {
       device = "pdf"
     )
 }
-
 ```
 
 #### By plate (comparing patients on more than one plate)
 
-```{r, warning = FALSE, message = FALSE}
+``` r
 my_patients <- 
   aml_data %>% 
   count(patient, plate) %>% 
@@ -384,19 +461,31 @@ aml_data_p %>%
   mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
   tof_histogram(channel_var = CD45, group_var = patient_plate, ordered = TRUE) + 
   labs(y = NULL)
+```
 
+![](aml_intro_vignette_files/figure-gfm/unnamed-chunk-4-1.png)<!-- -->
+
+``` r
 aml_data_p %>% 
   filter(patient %in% my_patients) %>% 
   mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
   tof_histogram(channel_var = pSTAT5, group_var = patient_plate, ordered = TRUE) + 
   labs(y = NULL)
+```
 
+![](aml_intro_vignette_files/figure-gfm/unnamed-chunk-4-2.png)<!-- -->
+
+``` r
 aml_data_p %>% 
   filter(patient %in% my_patients) %>% 
   mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
   tof_histogram(channel_var = CD34, group_var = patient_plate, ordered = TRUE) + 
   labs(y = NULL)
+```
 
+![](aml_intro_vignette_files/figure-gfm/unnamed-chunk-4-3.png)<!-- -->
+
+``` r
 aml_data_p %>% 
   filter(patient %in% my_patients) %>% 
   mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
@@ -404,19 +493,56 @@ aml_data_p %>%
   labs(y = NULL)
 ```
 
+![](aml_intro_vignette_files/figure-gfm/unnamed-chunk-4-4.png)<!-- -->
 
 ### By patient
 
 #### Cell counts
 
-```{r counts-patient}
+``` r
 aml_data %>% 
   count(patient) %>% 
   knitr::kable()
 ```
 
+| patient |      n |
+| :------ | -----: |
+| bm5721  |  29805 |
+| bm5871  |  18832 |
+| bm6152  |  64276 |
+| bm6631  |  23359 |
+| papwhs  |  42856 |
+| parajx  |  32045 |
+| parant  |  18942 |
+| parbfj  | 277461 |
+| parbiu  | 239711 |
+| parcvp  |  18992 |
+| parklc  |  20298 |
+| parmme  |  17141 |
+| parpwl  |  24291 |
+| partxh  |  22165 |
+| parwxu  |  73500 |
+| parxmp  |  16586 |
+| parzuu  |  33452 |
+| parzwh  |  86506 |
+| pasbbe  | 113623 |
+| pasegc  |  97379 |
+| paself  |  61071 |
+| pasfjj  |  10570 |
+| pasgwh  |  80036 |
+| paspsv  |  15857 |
+| pasptm  |   1920 |
+| pasrtp  | 190647 |
+| pasvzc  |  30490 |
+| pasxjy  |   4885 |
+| pasxvc  | 196573 |
+| pasyyw  |   5013 |
+| patgiy  |  38255 |
+| pathiw  |  50260 |
+| patjsp  | 211369 |
+| patlhb  |  84432 |
 
-```{r cell-number-patient-density}
+``` r
 aml_data %>% 
   count(patient) %>%
   ggplot(aes(x = n)) + 
@@ -434,8 +560,11 @@ aml_data %>%
   )
 ```
 
+![](aml_intro_vignette_files/figure-gfm/cell-number-patient-density-1.png)<!-- -->
+
 #### Univariate histograms
-```{r histograms-patient, eval = FALSE}
+
+``` r
 if (generate_histograms) { 
   aml_data_p %>% 
     tof_plot_all_histograms(
@@ -464,20 +593,34 @@ if (generate_histograms) {
 }
 ```
 
-
 ### By patient (comparing patients with both Dx and Rx)
 
 #### Cell counts
 
-```{r}
+``` r
 aml_data %>% 
   filter(patient %in% PAIRED_PATIENTS) %>% 
   count(patient, condition)
 ```
 
+    ## # A tibble: 22 x 3
+    ##    patient condition      n
+    ##    <chr>   <chr>      <int>
+    ##  1 parbiu  dx        109172
+    ##  2 parbiu  rx        130539
+    ##  3 parwxu  dx         33747
+    ##  4 parwxu  rx         39753
+    ##  5 parzuu  dx         29213
+    ##  6 parzuu  rx          4239
+    ##  7 pasgwh  dx         41728
+    ##  8 pasgwh  rx         38308
+    ##  9 pasrtp  dx         83931
+    ## 10 pasrtp  rx        106716
+    ## # … with 12 more rows
+
 #### Univariate histograms
 
-```{r signaling-condition-density-plots, message = FALSE, warning = FALSE, eval = FALSE}
+``` r
 SIGNALING_MARKERS %>% 
   syms() %>% 
   map(
@@ -497,7 +640,7 @@ SIGNALING_MARKERS %>%
 
 ### By stimulation (surface)
 
-```{r, warning = FALSE, message = FALSE}
+``` r
 if (generate_histograms) { 
   surface_plots <- 
     SURFACE_MARKERS %>% 
@@ -525,22 +668,28 @@ if (generate_histograms) {
 #   map(~ . + theme(legend.position = "none")) %>% 
 #   plot_grid(plotlist = ., align = "vh", ncol = 3) %>% 
 #   plot_grid(., legend, nrow = 1, rel_widths = c(3, 0.3))
-
 ```
-
 
 #### Cell counts
 
-```{r cell-number-stims}
+``` r
 aml_data %>% 
   count(stimulation) %>% 
   knitr::kable()
 ```
 
+| stimulation |      n |
+| :---------- | -----: |
+| Basal       | 405402 |
+| GMCSF       | 374932 |
+| HS5         | 332753 |
+| IL3         | 377493 |
+| IL6         | 385041 |
+| PVO4        | 376977 |
 
 #### Univariate histograms
 
-```{r}
+``` r
 if (generate_histograms) {
   
   aml_data_p %>% 
@@ -596,21 +745,17 @@ if (generate_histograms) {
 }
 ```
 
-## Classifier 
+## Classifier
 
-```{r}
+## Clustering
 
-```
-
-## Clustering 
-
-## Feature extraction 
+## Feature extraction
 
 ## Modeling
 
 ## Dimensionality reduction
 
-```{r, eval = FALSE}
+``` r
 pca_recipe <- 
   recipe(~., data = aml_data_p) %>% 
   step_zv(all_numeric()) %>% 
@@ -620,9 +765,4 @@ pca_recipe <-
 pca_prep <- prep(pca_recipe)
 
 pca_result <- juice(pca_prep)
-
-
 ```
-
-
-

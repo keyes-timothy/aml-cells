@@ -18,10 +18,12 @@ libraries <-
     "tidyverse", 
     "tidymodels", 
     "rlang", 
-    "ggthemes"
+    "ggthemes", 
+    "doParallel", 
+    "vip"
   )
 
-source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
+source(here::here("scripts", "setup", "aml_utils.R")) 
 call_libraries(libraries)
 
 # Parameters
@@ -45,13 +47,22 @@ mah_citrus_path <- here::here("data", "mahalanobis_citrus_features.rds")
 cos_citrus_path <- here::here("data", "cosine_citrus_features.rds")
 md_path <- here::here("data", "md.rds")
 
-DDPR_PROP <- 0.2
+DDPR_PROP <- 0.8
+
+# set a randomness seed to make everything reproducible 
+
+set.seed(2020)
 
 ```
 
-# Read in data
+# Reading in data
+
+First, I read in the data that I've extracted from the AML dataset. (I also load some other datasets here that I've played with, but I don't use them in the current analysis...yet.)
+
+The data have already been pre-processed according to the procedure described [here](), and patient-level features have been extracted from the single-cell data according to the procedure described [here](). 
 
 ```{r}
+# read in metadata
 metadata <- 
   md_path %>% 
   read_rds() %>% 
@@ -62,6 +73,7 @@ metadata <-
     outcome = first_event %>% str_replace("Censored", "Non-relapse")
   )
 
+# reading in mahalanobis distance-classified AML data
 mah_dev_data <- 
   mah_dev_path %>% 
   read_rds() %>% 
@@ -69,6 +81,7 @@ mah_dev_data <-
   left_join(metadata, by = "patient") %>% 
   replace(list = is.na(.), values = 0)
 
+# reading in cosine distance-classified AML data
 cos_dev_data <- 
   cos_dev_path %>% 
   read_rds() %>% 
@@ -76,6 +89,7 @@ cos_dev_data <-
   left_join(metadata, by = "patient") %>% 
   replace(list = is.na(.), values = 0)
 
+# reading in mahalanobis distance-classified citrus data
 mah_citrus_data <- 
   mah_citrus_path %>% 
   read_rds() %>% 
@@ -83,6 +97,7 @@ mah_citrus_data <-
   left_join(metadata, by = "patient") %>% 
   replace(list = is.na(.), values = 0)
 
+# reading in cosine distance-classified citrus data
 cos_citrus_data <- 
   cos_citrus_path %>% 
   read_rds() %>% 
@@ -94,8 +109,22 @@ cos_citrus_data <-
 
 # Very quick EDA
 
+Before any predictive modeling, it's good practice to do a little bit of exploratory data analysis (EDA) just to make sure you know what you're looking at and what you should expect from your model. I give what amounts to essentially the bare minimum of EDA here just to illustrate a few points that are on my mind about the AML dataset...
+
+## What samples do we have? 
+
+```{r}
+mah_dev_data %>% 
+  count(condition, outcome) %>% 
+  knitr::kable() 
+```
+
+Okay, so we have 29 samples in total, and 12 of them relapse (17 of them don't). So, this cohort is relatively small and should mostly be used for **discovery**, or hypothesis-generation. This will inform some of our modeling choices later, since we don't really have enough samples to do a true train/test validation in the most rigorous sense. 
+
 
 ## Mahalanobis developmental classifier features 
+
+Here are some PCA plots showing how well our samples can be separated in two dimensions based on their extracted DDPR features. 
 
 ```{r}
 # needs to show the percentage variance for each PC in the plot
@@ -121,8 +150,9 @@ pca_result %>%
   labs(title = "Developmental Classifier Features using Mahalanobis Distance")
 ```
 
+And here is some code that plots features in a way that we can try to interpret later (we will return to this after the modeling steps). 
 
-```{r, warning = FALSE}
+```{r, eval = TRUE, warning = FALSE}
 mah_dev_data %>% 
   pivot_longer(
     cols = c(-patient, -condition, -outcome), 
@@ -143,17 +173,38 @@ mah_dev_data %>%
           ) + 
           geom_point() + 
           coord_flip() + 
-          labs(title = feature)
+          labs(title = feature, x = "patient", y = "expression level")
       )
   ) %>% 
   pull(plots) %>% 
-  walk(.f = print)
-
+  `[`(seq(1, length(colnames(mah_dev_data)), 100))
 
 ```
 
+From these more or less randomly sampled plots, I hope to illustrate a trend for many of our features - that most of them are right-skewed (aka most patients have relatively low values within the same(ish) range, but several patients will be quite a bit higher than the others on each feature). 
+
+Here is a bit more evidence of this: 
+
+```{r}
+density_data <- 
+  mah_dev_data %>% 
+  mutate(across(.cols = where(is.numeric), scale)) %>%
+  select(-patient, -condition, -outcome) %>% 
+  pivot_longer(
+    cols = everything(), 
+    names_to = "channel", 
+    values_to = "expression"
+  ) 
+
+density_data %>% 
+  ggplot(aes(x = expression, group = channel)) + 
+  geom_density(size = 0.1) + 
+  geom_density(data = density_data, mapping = aes(x = expression, group = NULL), color = "red")
+```
 
 ## Cosine developmental classifier features
+
+We can make the same PCA plot as above for the classifier data that was classified using the cosine distance between cells and each manually-gated healthy population rather than the Mahalanobis distance. 
 
 ```{r}
 # needs to show the percentage variance for each PC in the plot
@@ -179,89 +230,288 @@ pca_result %>%
   labs(title = "Developmental Classifier Features using Cosine Distance")
 ```
 
+
+```{r}
+density_data <- 
+  cos_dev_data %>% 
+  mutate(across(.cols = where(is.numeric), scale)) %>%
+  select(-patient, -condition, -outcome) %>% 
+  pivot_longer(
+    cols = everything(), 
+    names_to = "channel", 
+    values_to = "expression"
+  ) 
+
+density_data %>% 
+  ggplot(aes(x = expression, group = channel)) + 
+  geom_density(size = 0.1) + 
+  geom_density(data = density_data, mapping = aes(x = expression, group = NULL), color = "red")
+```
+
+My point in showing these plots for the cosine data (even though we're really not going to look at it again in this presentation) is to illustrate that it doesn't seem to just be the Mahalanobis distance that introduces these properties to our feature matrices - they seem to be a property of the data (as represented by these feature extractions). 
+
+With this small amount of EDA behind us, we can move on to the modeling steps. 
+
 # Split data 
 
-```{r}
-mah_data_split <- initial_split(mah_dev_data, prop = 0.8, strata = outcome)
-mah_data_train <- training(mah_data_split)
-mah_data_test <- testing(mah_data_split)
+Because this dataset has been earmarked for discovery, we are not going to divide the data into a traditional "training" and "test" set for this specific task. Instead, we are going to break up the data into 5 cross-validation folds, wherein each fold will treat 80% of the data as an **analysis set** that will be used to fit the model and 20% of the data as an **assessment set** that will be used to evaluate the model. (5 is an arbitrary number of cv folds, by the way. You can choose more or less if you want.)
 
-cos_data_split <- initial_split(cos_dev_data, prop = 0.8, strata = outcome)
-cos_data_train <- training(cos_data_split)
-cos_data_test <- testing(cos_data_split)
+If we repeat this cross-validation strategy multiple times (**repeated cross-validation**), we can try to get around our small sample size by simulating access to multiple datasets. This overall procedure is sometimes referred to as "resampling" in the statistics world. The package {rsample} makes this process really painless in R.
+
+```{r}
+mah_dev_cv <- 
+  mah_dev_data %>% 
+  vfold_cv(v = 5, repeats = 10, strata = outcome) 
+
+cos_dev_cv <- 
+  cos_dev_data %>% 
+  vfold_cv(v = 5, repeats = 10, strata = outcome)
+
+mah_dev_cv
 ```
 
+This data structure will come in handy later. 
 
-# Replication of DDPR Elastic Net Model
+# Set up the modeling objects
+
+I've built my modeling framework in the [{tidymodels}](https://www.tidymodels.org/) ecosystem, which is a powerful suite of R packages for preprocessing, modeling, post-processing, and interpreting machine learning models in R. There are a lot of great design principles here, which is why I'm using it for the modelings tasks here.
+
+There's a [new free book](https://www.tmwr.org/) out about tidymodels, which you should check out if you're interested. Or I can just do all of the modeling for your project ;)
+
+
+First, I use the tidymodels package {recipes} to build a reproducible preprocessing framework for the data. Then, I use {dials} to create a grid (using maximum entropy) over which to search for the optimal elastic net parameters. Then, I use the modeling package {parsnip} to make the model specification (a logistic regression model with elastic net regularization). Finally, I incorporate each of these steps into a single workflow using the package {workflows}. 
 
 ```{r}
-ddpr_logistic <-
-  logistic_reg(mode = "classification", mixture = 0.5) %>% 
-  set_engine("glmnet")
+# preprocessing
+ddpr_dev_recipe <- 
+  mah_dev_data %>% 
+  recipe(formula = outcome ~ .) %>% 
+  step_rm(patient, condition) %>% 
+  step_normalize(-outcome) %>% 
+  step_mutate(outcome = as.factor(outcome))
 
-mah_ddpr_fit <- 
-  fit_xy(
-    ddpr_logistic, 
-    x = 
-      select(mah_data_train, -patient, -condition, -outcome),
-    y = 
-      pull(mah_data_train, outcome) %>% 
-      as.factor()
+# model turning
+en_param_grid <-
+  parameters(penalty(), mixture()) %>% 
+  grid_max_entropy(size = 100)
+  #grid_regular(levels = c(5, 5))
+
+# model specification
+ddpr_en_model_spec <- 
+  logistic_reg(penalty = tune(), mixture = tune()) %>% #should this be tuned?
+  set_engine("glmnet") %>% 
+  set_mode("classification")
+
+# overall workflow
+ddpr_en_workflow <- 
+  workflow() %>% 
+  add_recipe(ddpr_dev_recipe) %>% 
+  add_model(ddpr_en_model_spec)
+```
+
+# Tune the model
+
+With these initial pieces, I can use the {tune} package to fit thousands of models over both my cross validation folds and my candidate values for both of my elastic net parameters to find the optimal hyperparameters. By running this step in parallel on multiple cores on my laptop, I can save some time. 
+
+```{r}
+# Note that tidymodels runs on a {foreach} backend, 
+# which means that we can register a parallel worker to 
+# speed up our processing speed quite a bit 
+
+my_cluster <- makeCluster(14)
+registerDoParallel(my_cluster)
+
+ddpr_en_tune <- 
+  tune_grid(
+    ddpr_en_workflow, 
+    resamples = mah_dev_cv, 
+    grid = en_param_grid
   )
 
-my_predictions <- 
-  mah_ddpr_fit %>% 
-  multi_predict(select(mah_data_test, -patient, -condition, -outcome))
+stopCluster(my_cluster)
 
-prediction_table <- 
-  my_predictions %>% 
+```
+
+This gives us a massive nested tibble that will have accuracy metrics for each fold and each repetition of the resampling procedure. Together, these should give us a good estimate of which hyperparameters work best for the  model. 
+
+Our strategy here will be to take each repetition and consider it separately. Specifically, we will
+
+1) For each repetition, find the hyperparameter values associated with the highest accuracy across all folds. That is, calculate the model accuracy across all folds for each hyperparameter set and pick the one that has the highest average performance as "optimal." 
+1) If there are any ties, pick the model with the highest penalty (the **maximum parsimony** principle). If there is still a tie, pick the model with the highest L1 regularization (Lasso penalty). Both of these tie-breakers will result in simpler, sparser models (models with fewer predictors). 
+1) Refit the original dataset using the "optimal" hyperparameters from each repetition and interrogate those models.  
+
+
+```{r}
+optimal_metrics <- 
+  ddpr_en_tune %>% 
+  unnest(cols = .metrics) %>% 
+  filter(.metric == "accuracy") %>% 
+  rename(repetition = id, fold = id2) %>% 
+  group_by(repetition, penalty, mixture) %>% 
+  summarize(mean_accuracy = mean(.estimate)) %>% 
+  group_by(repetition, .add = FALSE) %>% 
+  slice_max(order_by = mean_accuracy, n = 1) %>% 
+  slice_max(order_by = penalty, n = 1) %>% 
+  slice_max(order_by = mixture, n = 1) %>% 
+  ungroup()
+
+optimal_metrics
+```
+
+From this, we can see that the estimates are a bit all-over-the-place, which makes sense, because our N is small, our samples comes from a very diverse underlying population (all AML patients). 
+
+A visualization: 
+
+```{r}
+optimal_metrics %>% 
   mutate(
-    patient = mah_data_test$patient, 
-    .pred = 
+    repetition = fct_reorder(repetition, mean_accuracy, .desc = TRUE)
+  ) %>% 
+  ggplot(aes(x = repetition, y = mean_accuracy)) + 
+  geom_hline(
+    yintercept = mean(optimal_metrics$mean_accuracy), 
+    color = "red", 
+    linetype = "dashed", 
+    size = 1
+  ) + 
+  geom_pointrange(aes(ymax = mean_accuracy, ymin = 0), size = 1) +
+  annotate(
+    geom = "text",
+    x = 
+      fct_reorder(
+        optimal_metrics$repetition, 
+        optimal_metrics$mean_accuracy, 
+        .desc = TRUE
+      ) %>% 
+      levels() %>% 
+      last(),
+    y = mean(optimal_metrics$mean_accuracy) + 0.02,
+    label = str_c((mean(optimal_metrics$mean_accuracy) * 100) %>% round(1), "%"),
+    color = "red", 
+    size = 4
+  ) +
+  scale_y_continuous(labels = scales::label_percent(accuracy = 1)) + 
+  labs(x = NULL, y = "Mean accuracy across CV folds") + 
+  theme_light()
+```
+
+This can help us understand the accuracy of our model across the 10 different resamplings. 
+
+# Fitting the whole model(s) 
+
+So, now we have 10 resamplings' worth of models, each of which has identified some optimal parameters for fitting the model. So, what do we do now? 
+
+We have to go back to the original dataset and fit each of these models on the entire dataset. From there, we can start asking questions about which of the features are most important across all of our folds and resamplings - the idea is that features that come up multiple times represent the most interesting candidates for us to interrogate further. 
+
+```{r}
+optimal_metrics <- 
+  optimal_metrics %>% 
+  mutate(
+    importance_scores = 
       map2(
-        .x = patient, 
-        .y = .pred, 
+        .x = penalty,
+        .y = mixture, 
         .f = 
-          ~ mutate(.y, patient = .x)
+          ~
+          finalize_workflow(
+            x = ddpr_en_workflow, 
+            parameters = tibble(penalty = .x, mixture = .y)
+          ) %>% 
+          fit(object = ., data = mah_dev_data) %>% 
+          pluck("fit") %>% 
+          pluck("fit") %>% 
+          vi()
+      )
+  )
+
+coefficient_counts <- 
+  optimal_metrics %>% 
+  pull(importance_scores) %>% 
+  map(
+    .x = ., 
+    .f = ~
+      .x %>% 
+      slice_max(order_by = Importance, n = 10) %>% 
+      pull(Variable)
+  ) %>% 
+  flatten_chr() %>% 
+  tibble(variable = .) %>% 
+  count(variable) %>% 
+  arrange(desc(n))
+
+coefficient_counts
+```
+
+We can see that some features come up in most of the 10 resamplings and others don't...
+
+```{r}
+coefficient_names <- 
+  coefficient_counts %>% 
+  pull("variable")
+
+coefficient_names
+```
+
+
+And a visualization of the most predictice features: 
+
+```{r}
+mah_dev_data %>% 
+  pivot_longer(
+    cols = c(-patient, -condition, -outcome), 
+    names_to = "feature", 
+    values_to = "value"
+  ) %>% 
+  group_by(feature) %>% 
+  nest() %>%
+  mutate(
+    plots = 
+      map2(
+        .x = data, 
+        .y = feature,
+        .f = 
+          ~ ggplot(
+            aes(x = fct_reorder(patient, value), y = value, color = outcome), 
+            data = .x
+          ) + 
+          geom_point() + 
+          coord_flip() + 
+          labs(title = feature, x = "patient", y = "expression level")
       )
   ) %>% 
-  select(-patient) %>% 
-  unnest(c(.pred)) %>% 
-  rename(predicted_outcome = .pred_class) %>% 
-  left_join(mah_data_test %>% select(patient, outcome)) %>% 
-  group_by(penalty) %>% 
-  summarize(percent_correct = mean(predicted_outcome == outcome) * 100) %>% 
-  arrange(desc(percent_correct))
-
-prediction_table
+  filter(feature %in% coefficient_names) %>% 
+  pull(plots) %>% 
+  walk(print)
 ```
 
+
+#  Future Directions
+
+The frustrating thing about being a bioinformatician-in-training (at least according to me) is that my "taste" in data science has matured much faster than my technical ability. So, what I've presented here represents only a very, very small degree of what I'm actually interested in looking at even for this tiny corner of my project! 
+
+Here are the other things on my mind: 
+
+* Looking at other feature matrices
+  * Compare feature matrices extracted using the DDPR methodology to those extracted using CITRUS/Scaffold methodolody
+  * Compare the performance of feature matrices extracted using the DDPR classifier to classifiers built with flowSOM and PhenoGraph clustering
+  * Compare the performance of feature matrices extracted using the DDPR classifier to matrices extracted using clustering on its own (without referencing the healthy spaces) 
+  * Build my own custom feature matrices using mutual information or the EMD to quantify signaling variables in a more subtle way. 
+  * Regardless of which of these feature matrices I use, it makes sense for me to think about performing a box-cox transformation 
+  
+* Deep learning 
+  * I want to do this so badly 
+  * We are limited in power in terms of patients, but not in terms of cells. The single-cell information could be very powerful here. 
+  * Finding developmental feature embeddings on a single-cell level will be much more possible (and cooler) with deep learning approaches - because we will avoid losing much of the resolution that we lose here
+  * I want to do this so so so so badly 
+  
+* Review of theory
+  * I need to do a bit more reading to adapt these models from logistic regression to surival regression (Cox modeling), which is more appropriate here
+  * I need to do a bit more reading about "variable importance metrics" and how reliable they are. 
+  * I need to do a bit more reading about how elastic net works to make sure I know what its notion of "variable importance" means more rigorously, and how I can coerce it to give me p-values (which journals care about). 
+  
+# Session Info
+  
 ```{r}
-class(prediction_table)
+sessionInfo()
 ```
-
-For the highest accuracy, choose the most highly penalized model and go with that one. 
-
-```{r}
-best_penalty <- 
-  prediction_table %>% 
-  slice_max(order_by = percent_correct) %>% 
-  slice_max(order_by = penalty) %>% 
-  pull(penalty)
-```
-
-```{r}
-mah_ddpr_fit %>% 
-  pluck("fit") %>% 
-  coef(s = best_penalty) %>% 
-  as.matrix() %>% 
-  as_tibble(rownames = "marker_name") %>% 
-  rename(coefficient = `1`) %>% 
-  filter(coefficient > 0.000000000000)
-
-```
-
-
-# CITRUS features Elastic Net Model
-
-...to come
+  
