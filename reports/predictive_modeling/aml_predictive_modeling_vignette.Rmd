@@ -59,7 +59,7 @@ set.seed(2020)
 
 First, I read in the data that I've extracted from the AML dataset. (I also load some other datasets here that I've played with, but I don't use them in the current analysis...yet.)
 
-The data have already been pre-processed according to the procedure described [here](), and patient-level features have been extracted from the single-cell data according to the procedure described [here](). 
+The data have already been pre-processed according to the procedure described [here](https://github.com/keyes-timothy/aml-cells/blob/master/reports/aml_intro_vignette.md), and patient-level features have been extracted from the single-cell data according to the procedure described [here](https://github.com/keyes-timothy/aml-cells/blob/master/reports/aml_feature_extraction_vignette.md). 
 
 ```{r}
 # read in metadata
