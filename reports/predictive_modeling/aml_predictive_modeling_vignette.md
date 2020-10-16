@@ -1,7 +1,7 @@
 AML Predictive Modeling Vignette
 ================
 tkeyes
-2020-10-05
+2020-10-16
 
   - [Reading in data](#reading-in-data)
   - [Very quick EDA](#very-quick-eda)
@@ -360,7 +360,7 @@ mah_dev_cv
     ## #  5-fold cross-validation repeated 10 times using stratification 
     ## # A tibble: 50 x 3
     ##    splits         id       id2  
-    ##    <named list>   <chr>    <chr>
+    ##    <list>         <chr>    <chr>
     ##  1 <split [22/7]> Repeat01 Fold1
     ##  2 <split [22/7]> Repeat01 Fold2
     ##  3 <split [24/5]> Repeat01 Fold3
@@ -400,20 +400,21 @@ single workflow using the package {workflows}.
 # preprocessing
 ddpr_dev_recipe <- 
   mah_dev_data %>% 
+  mutate(outcome = as.factor(outcome)) %>% 
   recipe(formula = outcome ~ .) %>% 
   step_rm(patient, condition) %>% 
-  step_normalize(-outcome) %>% 
-  step_mutate(outcome = as.factor(outcome))
+  step_normalize(-outcome)
 
 # model turning
 en_param_grid <-
   parameters(penalty(), mixture()) %>% 
   grid_max_entropy(size = 100)
-  #grid_regular(levels = c(5, 5))
+  # an alternative would be a regular grid, but this is slower
+  # grid_regular(levels = c(5, 5))
 
 # model specification
 ddpr_en_model_spec <- 
-  logistic_reg(penalty = tune(), mixture = tune()) %>% #should this be tuned?
+  logistic_reg(penalty = tune(), mixture = tune()) %>%
   set_engine("glmnet") %>% 
   set_mode("classification")
 
@@ -494,18 +495,18 @@ optimal_metrics
 ```
 
     ## # A tibble: 10 x 4
-    ##    repetition      penalty mixture mean_accuracy
-    ##    <chr>             <dbl>   <dbl>         <dbl>
-    ##  1 Repeat01   0.195         0.253          0.709
-    ##  2 Repeat02   0.195         0.253          0.674
-    ##  3 Repeat03   0.000410      0.983          0.709
-    ##  4 Repeat04   0.0720        0.505          0.714
-    ##  5 Repeat05   0.108         0.761          0.64 
-    ##  6 Repeat06   0.687         0.775          0.589
-    ##  7 Repeat07   0.0720        0.505          0.697
-    ##  8 Repeat08   0.195         0.253          0.691
-    ##  9 Repeat09   0.195         0.253          0.657
-    ## 10 Repeat10   0.0000000983  0.0654         0.594
+    ##    repetition    penalty mixture mean_accuracy
+    ##    <chr>           <dbl>   <dbl>         <dbl>
+    ##  1 Repeat01   0.0854       0.277         0.709
+    ##  2 Repeat02   0.0777       0.461         0.646
+    ##  3 Repeat03   0.00000382   0.966         0.709
+    ##  4 Repeat04   0.0777       0.461         0.743
+    ##  5 Repeat05   0.221        0.872         0.64 
+    ##  6 Repeat06   0.587        0.673         0.589
+    ##  7 Repeat07   0.0777       0.461         0.697
+    ##  8 Repeat08   0.0819       0.796         0.663
+    ##  9 Repeat09   0.356        0.126         0.657
+    ## 10 Repeat10   0.373        0.469         0.617
 
 From this, we can see that the estimates are a bit all-over-the-place,
 which makes sense, because our N is small, our samples comes from a very
@@ -567,22 +568,28 @@ represent the most interesting candidates for us to interrogate further.
 optimal_metrics <- 
   optimal_metrics %>% 
   mutate(
-    importance_scores = 
+    models = 
       map2(
-        .x = penalty,
+        .x = penalty, 
         .y = mixture, 
-        .f = 
-          ~
+        .f = ~
           finalize_workflow(
             x = ddpr_en_workflow, 
             parameters = tibble(penalty = .x, mixture = .y)
           ) %>% 
-          fit(object = ., data = mah_dev_data) %>% 
-          pluck("fit") %>% 
-          pluck("fit") %>% 
+          fit(object = ., data = mah_dev_data)
+      ),
+    importance_scores =
+      map(
+        .x = models, 
+        .f = ~ 
+          .x %>%
+          pluck("fit") %>%
+          pluck("fit") %>%
           vi()
       )
   )
+
 
 coefficient_counts <- 
   optimal_metrics %>% 
@@ -607,17 +614,17 @@ coefficient_counts
     ##    <chr>                 <int>
     ##  1 DC_CD90                  10
     ##  2 HSC_GMCSF_pS6            10
-    ##  3 Monocyte_IL6_pS6         10
-    ##  4 Thrombocyte_abundance    10
-    ##  5 Thrombocyte_IL6_pS6      10
-    ##  6 wbc                      10
-    ##  7 HSC_IL6_pS6               9
-    ##  8 Monocyte_CD117            9
+    ##  3 Monocyte_CD117           10
+    ##  4 Monocyte_IL6_pS6         10
+    ##  5 Thrombocyte_abundance    10
+    ##  6 Thrombocyte_IL6_pS6      10
+    ##  7 wbc                      10
+    ##  8 HSC_IL6_pS6               9
     ##  9 MPP_IL6_pS6               8
-    ## 10 MEP_CD33                  7
-    ## 11 DC_Basal_pCreb            3
-    ## 12 Monocyte_Basal_pS6        2
-    ## 13 MPP_CD33                  2
+    ## 10 DC_Basal_pCreb            4
+    ## 11 MEP_CD33                  4
+    ## 12 Monocyte_Basal_pS6        4
+    ## 13 MPP_CD33                  1
 
 We can see that some features come up in most of the 10 resamplings and
 others don’t…
@@ -630,13 +637,13 @@ coefficient_names <-
 coefficient_names
 ```
 
-    ##  [1] "DC_CD90"               "HSC_GMCSF_pS6"         "Monocyte_IL6_pS6"     
-    ##  [4] "Thrombocyte_abundance" "Thrombocyte_IL6_pS6"   "wbc"                  
-    ##  [7] "HSC_IL6_pS6"           "Monocyte_CD117"        "MPP_IL6_pS6"          
-    ## [10] "MEP_CD33"              "DC_Basal_pCreb"        "Monocyte_Basal_pS6"   
+    ##  [1] "DC_CD90"               "HSC_GMCSF_pS6"         "Monocyte_CD117"       
+    ##  [4] "Monocyte_IL6_pS6"      "Thrombocyte_abundance" "Thrombocyte_IL6_pS6"  
+    ##  [7] "wbc"                   "HSC_IL6_pS6"           "MPP_IL6_pS6"          
+    ## [10] "DC_Basal_pCreb"        "MEP_CD33"              "Monocyte_Basal_pS6"   
     ## [13] "MPP_CD33"
 
-And a visualization of the most predictice features:
+And a visualization of the most predictive features:
 
 ``` r
 mah_dev_data %>% 
@@ -668,6 +675,105 @@ mah_dev_data %>%
 ```
 
 ![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-1.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-2.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-3.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-4.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-5.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-6.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-7.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-8.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-9.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-10.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-11.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-12.png)<!-- -->![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-16-13.png)<!-- -->
+
+From there, we can use our models that were fit on the entire dataset
+and see where they performed best.
+
+``` r
+perf_metrics <- metric_set(accuracy, sens, spec, f_meas)
+
+performance_metrics <- 
+  optimal_metrics %>% 
+  mutate(
+    predictions = 
+      map(
+        .x = models, 
+        .f = ~
+          predict(object = .x, new_data = mah_dev_data)
+      ), 
+    performance_metrics =
+      map(
+        .x = predictions,
+        .f = ~
+          .x %>%
+          mutate(truth = as.factor(mah_dev_data$outcome)) %>%
+          perf_metrics(
+            truth = truth,
+            estimate = .pred_class
+          )
+      )
+  )
+
+performance_metrics %>% 
+  pull(performance_metrics) %>% 
+  bind_rows() %>% 
+  select(-.estimator) %>% 
+  group_by(.metric) %>% 
+  summarize(.estimate = mean(.estimate))
+```
+
+    ## `summarise()` ungrouping output (override with `.groups` argument)
+
+    ## # A tibble: 4 x 2
+    ##   .metric  .estimate
+    ##   <chr>        <dbl>
+    ## 1 accuracy     0.9  
+    ## 2 f_meas       0.933
+    ## 3 sens         1    
+    ## 4 spec         0.758
+
+In general, we can see that, on average, each of the resampled models
+(when rerun on all the data) give us good sensitivity and *decent*
+specificity. Recall that
+
+  - Sensitivity refers to the number of **True Positives** that are
+    captured by the model (i.e. proportion of True Positives that the
+    model labels as positive)
+  - Specificity refers to the number of **True Negatives** that are
+    captured by the model (i.e. proportion of True Negatives that the
+    model labels as negative).
+
+Thus, our model has a bias for labeling kids as having a risk of relapse
+even if they don’t.
+
+Using our favorite features, we can now rerun our PCA and see if the
+patients segregate better using just our favorite features:
+
+``` r
+pca_recipe <- 
+  recipe(
+    ~., 
+    data = 
+      mah_dev_data %>% 
+      select(all_of(c("outcome", coefficient_names))),
+  ) %>% 
+  step_zv(all_numeric()) %>% 
+  step_normalize(all_numeric()) %>% 
+  step_pca(all_numeric(), num_comp = 5)
+
+pca_prep <- prep(pca_recipe)
+
+pca_result <- juice(pca_prep)
+
+pca_result %>% 
+  mutate(outcome = fct_rev(outcome)) %>% 
+  ggplot(aes(x = PC1, y = PC2, color = outcome)) + 
+  geom_point(size = 3, alpha = 0.7) + 
+  labs(title = "Developmental Classifier Features using Mahalanobis Distance")
+```
+
+![](aml_predictive_modeling_vignette_files/figure-gfm/unnamed-chunk-18-1.png)<!-- -->
+
+Finally, we store the vector containing the name of the most-predictive
+features in its own file so that we can reference it later.
+
+``` r
+coefficient_names %>% 
+  write_rds(
+    x = ., 
+    file = here::here("data", "modeling_logistic", "mah_dev_feature_names.rds")
+  ) 
+```
 
 # Future Directions
 
@@ -735,56 +841,32 @@ sessionInfo()
     ## [8] base     
     ## 
     ## other attached packages:
-    ##  [1] vip_0.2.1         doParallel_1.0.15 iterators_1.0.12  foreach_1.4.7    
-    ##  [5] ggthemes_4.2.0    rlang_0.4.6       yardstick_0.0.4   workflows_0.1.0  
-    ##  [9] tune_0.0.1        rsample_0.0.5     recipes_0.1.13    parsnip_0.0.5    
-    ## [13] infer_0.5.1       dials_0.0.4       scales_1.1.0      broom_0.5.4      
-    ## [17] tidymodels_0.0.4  forcats_0.4.0     stringr_1.4.0     dplyr_1.0.0      
-    ## [21] purrr_0.3.3       readr_1.3.1       tidyr_1.0.0       tibble_2.1.3     
-    ## [25] ggplot2_3.3.0     tidyverse_1.3.0  
+    ##  [1] vip_0.2.2         doParallel_1.0.15 iterators_1.0.12  foreach_1.5.0    
+    ##  [5] ggthemes_4.2.0    rlang_0.4.7       yardstick_0.0.7   workflows_0.2.0  
+    ##  [9] tune_0.1.1        rsample_0.0.8     recipes_0.1.13    parsnip_0.1.3    
+    ## [13] modeldata_0.0.2   infer_0.5.3       dials_0.0.9       scales_1.1.1     
+    ## [17] broom_0.7.1       tidymodels_0.1.1  forcats_0.4.0     stringr_1.4.0    
+    ## [21] dplyr_1.0.2       purrr_0.3.4       readr_1.4.0       tidyr_1.1.2      
+    ## [25] tibble_3.0.3      ggplot2_3.3.2     tidyverse_1.3.0  
     ## 
     ## loaded via a namespace (and not attached):
-    ##   [1] readxl_1.3.1         backports_1.1.5      tidytext_0.2.2      
-    ##   [4] plyr_1.8.5           igraph_1.2.4.2       splines_3.6.2       
-    ##   [7] crosstalk_1.0.0      listenv_0.8.0        SnowballC_0.6.0     
-    ##  [10] rstantools_2.0.0     inline_0.3.15        digest_0.6.23       
-    ##  [13] htmltools_0.4.0      rsconnect_0.8.16     fansi_0.4.1         
-    ##  [16] magrittr_1.5         globals_0.12.5       modelr_0.1.5        
-    ##  [19] gower_0.2.1          matrixStats_0.55.0   xts_0.12-0          
-    ##  [22] hardhat_0.1.1        prettyunits_1.1.1    colorspace_1.4-1    
-    ##  [25] rvest_0.3.5          haven_2.2.0          xfun_0.12           
-    ##  [28] callr_3.4.1          crayon_1.3.4         jsonlite_1.6        
-    ##  [31] lme4_1.1-21          survival_3.1-8       zoo_1.8-7           
-    ##  [34] glue_1.4.1           gtable_0.3.0         ipred_0.9-9         
-    ##  [37] pkgbuild_1.0.6       rstan_2.19.2         shape_1.4.4         
-    ##  [40] DBI_1.1.0            miniUI_0.1.1.1       Rcpp_1.0.3          
-    ##  [43] xtable_1.8-4         GPfit_1.0-8          stats4_3.6.2        
-    ##  [46] lava_1.6.6           StanHeaders_2.21.0-1 prodlim_2019.11.13  
-    ##  [49] DT_0.11              glmnet_3.0-2         htmlwidgets_1.5.1   
-    ##  [52] httr_1.4.1           threejs_0.3.3        ellipsis_0.3.0      
-    ##  [55] farver_2.0.3         pkgconfig_2.0.3      loo_2.2.0           
-    ##  [58] nnet_7.3-12          dbplyr_1.4.2         utf8_1.1.4          
-    ##  [61] here_0.1             labeling_0.3         tidyselect_1.1.0    
-    ##  [64] DiceDesign_1.8-1     reshape2_1.4.3       later_1.0.0         
-    ##  [67] munsell_0.5.0        cellranger_1.1.0     tools_3.6.2         
-    ##  [70] cli_2.0.1            generics_0.0.2       ggridges_0.5.2      
-    ##  [73] evaluate_0.14        fastmap_1.0.1        yaml_2.2.0          
-    ##  [76] processx_3.4.1       knitr_1.27           fs_1.3.1            
-    ##  [79] future_1.16.0        nlme_3.1-143         mime_0.8            
-    ##  [82] rstanarm_2.19.2      xml2_1.2.2           tokenizers_0.2.1    
-    ##  [85] compiler_3.6.2       bayesplot_1.7.1      shinythemes_1.1.2   
-    ##  [88] rstudioapi_0.10      reprex_0.3.0         tidyposterior_0.0.2 
-    ##  [91] lhs_1.0.1            stringi_1.4.5        highr_0.8           
-    ##  [94] ps_1.3.0             lattice_0.20-38      Matrix_1.2-18       
-    ##  [97] nloptr_1.2.1         markdown_1.1         shinyjs_1.1         
-    ## [100] vctrs_0.3.1          pillar_1.4.3         lifecycle_0.2.0     
-    ## [103] furrr_0.1.0          httpuv_1.5.2         R6_2.4.1            
-    ## [106] promises_1.1.0       gridExtra_2.3        janeaustenr_0.1.5   
-    ## [109] codetools_0.2-16     boot_1.3-24          colourpicker_1.0    
-    ## [112] MASS_7.3-51.5        gtools_3.8.1         assertthat_0.2.1    
-    ## [115] rprojroot_1.3-2      withr_2.1.2          shinystan_2.5.0     
-    ## [118] hms_0.5.2            grid_3.6.2           rpart_4.1-15        
-    ## [121] timeDate_3043.102    minqa_1.2.4          class_7.3-15        
-    ## [124] rmarkdown_2.0        pROC_1.16.1          tidypredict_0.4.3   
-    ## [127] shiny_1.4.0          lubridate_1.7.4      base64enc_0.1-3     
-    ## [130] dygraphs_1.1.1.6
+    ##  [1] colorspace_1.4-1   ellipsis_0.3.1     class_7.3-15       rprojroot_1.3-2   
+    ##  [5] fs_1.3.1           rstudioapi_0.11    listenv_0.8.0      furrr_0.1.0       
+    ##  [9] farver_2.0.3       prodlim_2019.11.13 fansi_0.4.1        lubridate_1.7.9   
+    ## [13] xml2_1.2.2         codetools_0.2-16   splines_3.6.2      knitr_1.27        
+    ## [17] jsonlite_1.7.1     pROC_1.16.1        dbplyr_1.4.4       compiler_3.6.2    
+    ## [21] httr_1.4.2         backports_1.1.5    assertthat_0.2.1   Matrix_1.2-18     
+    ## [25] cli_2.0.2          htmltools_0.4.0    tools_3.6.2        gtable_0.3.0      
+    ## [29] glue_1.4.1         Rcpp_1.0.3         cellranger_1.1.0   DiceDesign_1.8-1  
+    ## [33] vctrs_0.3.4        timeDate_3043.102  gower_0.2.1        xfun_0.12         
+    ## [37] globals_0.12.5     rvest_0.3.5        lifecycle_0.2.0    future_1.16.0     
+    ## [41] MASS_7.3-51.5      ipred_0.9-9        hms_0.5.2          yaml_2.2.0        
+    ## [45] gridExtra_2.3      rpart_4.1-15       stringi_1.4.5      highr_0.8         
+    ## [49] lhs_1.0.1          hardhat_0.1.4      lava_1.6.6         shape_1.4.4       
+    ## [53] pkgconfig_2.0.3    evaluate_0.14      lattice_0.20-38    labeling_0.3      
+    ## [57] tidyselect_1.1.0   here_0.1           plyr_1.8.5         magrittr_1.5      
+    ## [61] R6_2.4.1           generics_0.0.2     DBI_1.1.0          pillar_1.4.3      
+    ## [65] haven_2.2.0        withr_2.3.0        survival_3.1-8     nnet_7.3-12       
+    ## [69] modelr_0.1.5       crayon_1.3.4       utf8_1.1.4         rmarkdown_2.4     
+    ## [73] grid_3.6.2         readxl_1.3.1       blob_1.2.1         reprex_0.3.0      
+    ## [77] digest_0.6.23      GPfit_1.0-8        munsell_0.5.0      glmnet_4.0-2

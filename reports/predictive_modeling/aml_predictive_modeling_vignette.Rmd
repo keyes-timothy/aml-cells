@@ -278,27 +278,27 @@ I've built my modeling framework in the [{tidymodels}](https://www.tidymodels.or
 
 There's a [new free book](https://www.tmwr.org/) out about tidymodels, which you should check out if you're interested. Or I can just do all of the modeling for your project ;)
 
-
 First, I use the tidymodels package {recipes} to build a reproducible preprocessing framework for the data. Then, I use {dials} to create a grid (using maximum entropy) over which to search for the optimal elastic net parameters. Then, I use the modeling package {parsnip} to make the model specification (a logistic regression model with elastic net regularization). Finally, I incorporate each of these steps into a single workflow using the package {workflows}. 
 
 ```{r}
 # preprocessing
 ddpr_dev_recipe <- 
   mah_dev_data %>% 
+  mutate(outcome = as.factor(outcome)) %>% 
   recipe(formula = outcome ~ .) %>% 
   step_rm(patient, condition) %>% 
-  step_normalize(-outcome) %>% 
-  step_mutate(outcome = as.factor(outcome))
+  step_normalize(-outcome)
 
 # model turning
 en_param_grid <-
   parameters(penalty(), mixture()) %>% 
   grid_max_entropy(size = 100)
-  #grid_regular(levels = c(5, 5))
+  # an alternative would be a regular grid, but this is slower
+  # grid_regular(levels = c(5, 5))
 
 # model specification
 ddpr_en_model_spec <- 
-  logistic_reg(penalty = tune(), mixture = tune()) %>% #should this be tuned?
+  logistic_reg(penalty = tune(), mixture = tune()) %>%
   set_engine("glmnet") %>% 
   set_mode("classification")
 
@@ -332,7 +332,7 @@ stopCluster(my_cluster)
 
 ```
 
-This gives us a massive nested tibble that will have accuracy metrics for each fold and each repetition of the resampling procedure. Together, these should give us a good estimate of which hyperparameters work best for the  model. 
+This gives us a massive nested tibble that will have accuracy metrics for each fold and each repetition of the resampling procedure. Together, these should give us a good estimate of which hyperparameters work best for the model. 
 
 Our strategy here will be to take each repetition and consider it separately. Specifically, we will
 
@@ -407,22 +407,28 @@ We have to go back to the original dataset and fit each of these models on the e
 optimal_metrics <- 
   optimal_metrics %>% 
   mutate(
-    importance_scores = 
+    models = 
       map2(
-        .x = penalty,
+        .x = penalty, 
         .y = mixture, 
-        .f = 
-          ~
+        .f = ~
           finalize_workflow(
             x = ddpr_en_workflow, 
             parameters = tibble(penalty = .x, mixture = .y)
           ) %>% 
-          fit(object = ., data = mah_dev_data) %>% 
-          pluck("fit") %>% 
-          pluck("fit") %>% 
+          fit(object = ., data = mah_dev_data)
+      ),
+    importance_scores =
+      map(
+        .x = models, 
+        .f = ~ 
+          .x %>%
+          pluck("fit") %>%
+          pluck("fit") %>%
           vi()
       )
   )
+
 
 coefficient_counts <- 
   optimal_metrics %>% 
@@ -453,7 +459,7 @@ coefficient_names
 ```
 
 
-And a visualization of the most predictice features: 
+And a visualization of the most predictive features: 
 
 ```{r}
 mah_dev_data %>% 
@@ -482,6 +488,84 @@ mah_dev_data %>%
   filter(feature %in% coefficient_names) %>% 
   pull(plots) %>% 
   walk(print)
+```
+
+From there, we can use our models that were fit on the entire dataset and see where they performed best.  
+
+```{r}
+perf_metrics <- metric_set(accuracy, sens, spec, f_meas)
+
+performance_metrics <- 
+  optimal_metrics %>% 
+  mutate(
+    predictions = 
+      map(
+        .x = models, 
+        .f = ~
+          predict(object = .x, new_data = mah_dev_data)
+      ), 
+    performance_metrics =
+      map(
+        .x = predictions,
+        .f = ~
+          .x %>%
+          mutate(truth = as.factor(mah_dev_data$outcome)) %>%
+          perf_metrics(
+            truth = truth,
+            estimate = .pred_class
+          )
+      )
+  )
+
+performance_metrics %>% 
+  pull(performance_metrics) %>% 
+  bind_rows() %>% 
+  select(-.estimator) %>% 
+  group_by(.metric) %>% 
+  summarize(.estimate = mean(.estimate))
+```
+
+In general, we can see that, on average, each of the resampled models (when rerun on all the data) give us good sensitivity and *decent* specificity. Recall that 
+
+* Sensitivity refers to the number of **True Positives** that are captured by the model (i.e. proportion of True Positives that the model labels as positive) 
+* Specificity refers to the number of **True Negatives** that are captured by the model (i.e. proportion of True Negatives that the model labels as negative). 
+
+Thus, our model has a bias for labeling kids as having a risk of relapse even if they don't. 
+
+Using our favorite features, we can now rerun our PCA and see if the patients segregate better using just our favorite features: 
+
+```{r}
+pca_recipe <- 
+  recipe(
+    ~., 
+    data = 
+      mah_dev_data %>% 
+      select(all_of(c("outcome", coefficient_names))),
+  ) %>% 
+  step_zv(all_numeric()) %>% 
+  step_normalize(all_numeric()) %>% 
+  step_pca(all_numeric(), num_comp = 5)
+
+pca_prep <- prep(pca_recipe)
+
+pca_result <- juice(pca_prep)
+
+pca_result %>% 
+  mutate(outcome = fct_rev(outcome)) %>% 
+  ggplot(aes(x = PC1, y = PC2, color = outcome)) + 
+  geom_point(size = 3, alpha = 0.7) + 
+  labs(title = "Developmental Classifier Features using Mahalanobis Distance")
+```
+
+
+Finally, we store the vector containing the name of the most-predictive features in its own file so that we can reference it later. 
+
+```{r}
+coefficient_names %>% 
+  write_rds(
+    x = ., 
+    file = here::here("data", "modeling_logistic", "mah_dev_feature_names.rds")
+  ) 
 ```
 
 
