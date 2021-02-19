@@ -60,21 +60,59 @@ metadata <-
     patient, 
     age = age_at_diagnosis_in_days, 
     wbc = wbc_at_diagnosis, 
-    outcome = first_event %>% str_replace("Censored", "Non-relapse")
+    outcome = first_event %>% str_replace("Censored", "Non-relapse"), 
+    fab_category, 
+    cns_disease, 
+    primary_cytogenetic_code, 
+    cytogenetic_complexity, 
+    aml0531_risk = 
+      case_when(
+        inv_16 == "Yes" | t_8_21 == "Yes" ~ "Low", 
+        any(
+          monosomy_5 == "Yes", 
+          monosomy_7 == "Yes", 
+          del5q == "Yes", 
+          !is.na(flt3_itd_allelic_ratio)
+        )                                 ~ "High", 
+        TRUE                              ~ "Intermediate"
+      )
   )
 
 aml_data <- 
   single_cell_path %>% 
-  read_rds()
+  read_rds() %>% 
+  group_by(file_names) %>% 
+  slice_sample(prop = 0.5) %>% 
+  ungroup()
 
 
 patient_features <- 
   patient_features_path %>% 
   read_rds() %>% 
   left_join(metadata, by = "patient") %>% 
-  filter(!is.na(outcome)) %>% 
+  filter(!is.na(outcome)) %>%
   replace(list = is.na(.), values = 0)
 
+
+```
+
+
+```{r}
+metadata %>% 
+  count(primary_cytogenetic_code) %>% 
+  arrange(desc(n))
+
+metadata %>% 
+  count(fab_category) %>% 
+  arrange(desc(n))
+
+metadata %>% 
+  count(cns_disease) %>% 
+  arrange(desc(n))
+
+metadata %>% 
+  count(cytogenetic_complexity) %>% 
+  arrange(cytogenetic_complexity)
 
 ```
 
@@ -126,10 +164,66 @@ feature_names <-
       )
   )
 
-glimpse(feature_names)
+feature_names
 
 ```
-# Explore features
+
+# construct final model
+
+Next, we fit the final model (and only using the features we're interested in). 
+
+```{r}
+model_df <- 
+  patient_features %>% 
+  select(all_of(feature_names$original_names))
+
+predicted_outcome <- 
+  logistic_reg(penalty = 0, mixture = 0) %>% 
+  set_engine("glmnet") %>% 
+  fit_xy(
+    x = model_df, 
+    y = as.factor(patient_features$outcome)
+  ) %>% 
+  predict(model_df) %>% 
+  pull(.pred_class)
+```
+
+
+```{r}
+prediction_summary <- 
+  patient_features %>% 
+  mutate(
+    predicted_outcome = if_else(predicted_outcome == "Non-relapse", "Low", "High"), 
+    hybrid_prediction = any(predicted_outcome == "High", aml0531_risk == "High")
+  ) %>% 
+  group_by(outcome) %>% 
+  summarize(
+    predicted_correct = 
+      sum(
+        predicted_outcome == "High" & outcome == "Relapse" | 
+          predicted_outcome == "Low" & outcome == "Non-relapse"
+      ) / n(), 
+    aml0531_correct = 
+      sum(
+        aml0531_risk == "High" & outcome == "Relapse" | 
+          aml0531_risk == "Low" & outcome == "Non-relapse"
+      ) / n(), 
+    hybrid_correct = 
+      sum(
+        hybrid_prediction & outcome == "Relapse" | 
+          !hybrid_prediction & outcome == "Non-relapse"
+      ) / n()
+  )
+
+
+prediction_summary
+```
+
+
+ 
+
+
+# Explore features in diagnostic samples
 
 ## Patient-level features
 
@@ -148,15 +242,19 @@ feature_names %>%
 ## Abundance features 
 
 ```{r}
-feature_names %>% 
-  filter(feature_type == "abundance") %>% 
-  pull(original_names) %>% 
-  select(.data = patient_features, all_of(.), patient, condition, outcome) %>% 
+# feature_names %>% 
+#   filter(feature_type == "abundance") %>% 
+#   pull(original_names) %>% 
+#   select(.data = patient_features, all_of(.), patient, condition, outcome) %>%
+  
+patient_features %>% 
   filter(condition == "dx") %>% 
   mutate(outcome = fct_rev(outcome)) %>% 
   ggplot(aes(x = outcome, y = Thrombocyte_abundance, fill = outcome)) + 
   geom_violin(draw_quantiles = 0.5) + 
-  geom_point(alpha = 0.8)
+  geom_point(alpha = 0.8) + 
+  ggrepel::geom_text_repel(aes(label = fab_category), nudge_x = 0.1) + 
+  scale_y_continuous(labels = scales::label_percent())
 ```
 
 ## Surface markers 
@@ -164,9 +262,10 @@ feature_names %>%
 ```{r}
 aml_data <- 
   aml_data %>% 
-  left_join(metadata %>% select(patient, outcome))
+  left_join(metadata, by = c("patient"))
 
 ```
+
 
 ```{r, warning = FALSE, message = FALSE, out.width = "100%"}
 
@@ -175,20 +274,39 @@ plot_surface <- function(cell_population, marker){
   patient_order <- 
     aml_data %>% 
     filter(condition == "dx", mahalanobis_cluster == cell_population) %>% 
-    group_by(patient, outcome) %>% 
+    group_by(mahalanobis_cluster, patient) %>% 
+    filter(n() > 50) %>% 
+    group_by(patient, fab_category, outcome) %>% 
     summarize(marker := mean(!!sym(marker))) %>% 
     ungroup() %>% 
-    arrange(outcome, desc(marker)) %>% 
+    arrange(outcome, desc(fab_category), desc(marker)) %>% 
     pull(patient)
   
   aml_data %>% 
     filter(condition == "dx", mahalanobis_cluster == cell_population) %>% 
+    group_by(mahalanobis_cluster, patient) %>% 
+    filter(n() > 50) %>% 
+    ungroup() %>% 
     mutate(
       patient = factor(patient, levels = patient_order), 
       outcome = fct_rev(outcome)
     ) %>% 
     ggplot(aes_string(x = marker, y = "patient", fill = "outcome")) + 
     geom_density_ridges() + 
+    geom_text(
+      aes(label = fab_category),
+      data = 
+        aml_data %>% 
+        filter(condition == "dx", mahalanobis_cluster == cell_population) %>% 
+        group_by(mahalanobis_cluster, patient) %>% 
+        filter(n() > 50) %>% 
+        ungroup() %>% 
+        mutate(!!marker := max(!!sym(marker))) %>% 
+        group_by(patient) %>% 
+        slice_head(n = 1), 
+      nudge_y = 0.5, 
+      size = 3
+    ) + 
     labs(
       x = str_c(marker, " expression (arcsinh-counts)"), 
       y = "Density of cells", 
@@ -212,21 +330,25 @@ surface_plots %>%
 
 ## Signaling features
 
-
 ```{r, warning = FALSE, message = FALSE, out.width = "100%"}
 plot_signaling <- function(cell_population, marker, stimulation){
   
   patient_order <- 
     aml_data %>% 
     filter(condition == "dx", mahalanobis_cluster == cell_population) %>% 
-    group_by(patient, outcome) %>% 
+    group_by(mahalanobis_cluster, patient) %>% 
+    filter(n() > 50) %>% 
+    group_by(patient, fab_category, outcome) %>% 
     summarize(marker := mean(!!sym(marker))) %>% 
     ungroup() %>% 
-    arrange(outcome, desc(marker)) %>% 
+    arrange(outcome, desc(fab_category), desc(marker)) %>% 
     pull(patient)
   
   aml_data %>% 
     filter(condition == "dx", mahalanobis_cluster == cell_population, stimulation == stimulation) %>% 
+    group_by(mahalanobis_cluster, patient) %>% 
+    filter(n() > 50) %>% 
+    ungroup() %>% 
     mutate(
       patient = factor(patient, levels = patient_order), 
       outcome = fct_rev(outcome)
@@ -252,6 +374,92 @@ signaling_plots %>%
   walk(print)
 ```
 
+## Some more depth with pS6 
+
+
+```{r, message = FALSE, warning = FALSE}
+plot_s6 <- 
+  function(cell_population, my_stimulation, my_condition = "dx") {
+    
+    patient_order <- 
+      aml_data %>% 
+      filter(
+        condition == my_condition, 
+        mahalanobis_cluster == cell_population, 
+        stimulation %in% c(my_stimulation, "Basal")
+      ) %>% 
+      group_by(outcome, patient) %>% 
+      filter(n() > 50) %>% 
+      summarize(pS6 = median(pS6)) %>% 
+      arrange(desc(outcome), desc(pS6)) %>% 
+      pull(patient)
+    
+    aml_data %>% 
+      filter(
+        condition == my_condition,
+        mahalanobis_cluster == cell_population, 
+        stimulation %in% c(my_stimulation, "Basal")
+      ) %>% 
+      group_by(patient) %>% 
+      filter(n() > 50) %>% 
+      mutate(patient = factor(patient, levels = patient_order)) %>% 
+      ggplot(aes(x = pS6, y = patient, fill = stimulation, linetype = outcome)) + 
+      geom_density_ridges(alpha = 0.5) + 
+      labs(caption = str_c("pS6 in ", cell_population, "-like cells"))
+  } 
+
+```
+
+
+The phenograph paper found that pS6 responses to various stimulations differed by cell type in healthy samples, so can confirm that in our data as well. 
+
+```{r}
+feature_names %>% 
+  filter(marker == "pS6") %>% 
+  mutate(plots = map2(.x = cell_population, .y = stimulation, .f = plot_s6, my_condition = "healthy")) %>% 
+  pull(plots) %>% 
+  walk(.x = ., .f = print)
+
+```
+
+```{r}
+
+my_stimulations <- 
+  feature_names %>% 
+  filter(marker == "pS6") %>% 
+  pull(stimulation) %>% 
+  unique()
+
+patient_order <- 
+      aml_data %>% 
+      filter(
+        condition == "healthy", 
+        stimulation %in% c(my_stimulations, "Basal")
+      ) %>% 
+      group_by(patient) %>% 
+      filter(n() > 50) %>% 
+      summarize(pS6 = median(pS6)) %>% 
+      arrange(desc(pS6)) %>% 
+      pull(patient)
+    
+    aml_data %>% 
+      filter(
+        condition == "healthy", 
+        stimulation %in% c(my_stimulations, "Basal")
+      ) %>% 
+      group_by(patient) %>% 
+      filter(n() > 50) %>% 
+      mutate(mahalanobis_cluster = factor(mahalanobis_cluster, levels = rev(CLASSIFIER_POPULATIONS))) %>% 
+      ggplot(aes(x = pS6, y = mahalanobis_cluster, fill = stimulation)) + 
+      geom_density_ridges(alpha = 0.5)
+
+feature_names %>% 
+  filter(marker == "pS6") %>% 
+  mutate(plots = map2(.x = cell_population, .y = stimulation, .f = plot_s6)) %>% 
+  pull(plots) %>% 
+  walk(.x = ., .f = print)
+  
+```
 
 
 
