@@ -3,19 +3,19 @@ AML Feature Extraction Vignette
 tkeyes
 2021-02-19
 
--   [Executive Summary](#executive-summary)
--   [Read in data](#read-in-data)
--   [DDPR](#ddpr)
-    -   [Helper functions](#helper-functions)
-    -   [Calculate DDPR feature
+  - [Executive Summary](#executive-summary)
+  - [Read in data](#read-in-data)
+  - [DDPR](#ddpr)
+      - [Helper functions](#helper-functions)
+      - [Calculate DDPR feature
         matrices](#calculate-ddpr-feature-matrices)
-    -   [Calculate abundance + central tendency feature
+      - [Calculate abundance + central tendency feature
         matrices](#calculate-abundance-central-tendency-feature-matrices)
-    -   [Calculate “CITRUS” feature
+      - [Calculate “CITRUS” feature
         matrices](#calculate-citrus-feature-matrices)
-    -   [Calculate feature matrices (with EMD for
+      - [Calculate feature matrices (with EMD for
         signaling)](#calculate-feature-matrices-with-emd-for-signaling)
-        -   [Calculate feature matrices with JS
+          - [Calculate feature matrices with JS
             Index](#calculate-feature-matrices-with-js-index)
 
 ``` r
@@ -35,7 +35,6 @@ libraries <-
     "ggiraphExtra",
     "emdist",
     "philentropy", 
-    "FlowSOM", 
     "tidytof"
   )
 
@@ -55,7 +54,7 @@ marker_setup()
 patient_setup()
 
 # Misc globals for running different parts of this vignette
-is_sampled <- TRUE
+is_sampled <- FALSE
 aml_path <- here::here("data", "aml_data_clustered.rds")
 all_path <- here::here("data", "all_data_clustered.rds")
 sample_string <- ""
@@ -76,11 +75,11 @@ variety of CyTOF papers as a preamble to using them in some predictive
 models. The feature extraction methods that we use include the
 following:
 
--   [Developmentally-Dependent Predictor of Relapse
+  - [Developmentally-Dependent Predictor of Relapse
     (DDPR)](https://pubmed.ncbi.nlm.nih.gov/29505032/)
--   [CITRUS](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4084463/)/[Statistical
+  - [CITRUS](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4084463/)/[Statistical
     Scaffold](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4537647/)
--   Some hybrid methods using [Earth-Mover’s
+  - Some hybrid methods using [Earth-Mover’s
     Distance](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4805242/) or
     the [Jensen-Shannon
     divergence](https://en.wikipedia.org/wiki/Jensen%E2%80%93Shannon_divergence)
@@ -106,10 +105,10 @@ cells that were read in from each file.
 
 The DDPR feature matrix has 3 types of features:
 
--   Proportion of cells in each cell population *expanded* relative to
+  - Proportion of cells in each cell population *expanded* relative to
     healthy controls.
--   Mean expression of lineage markers in each of these sub-populations
--   Proportion of cells that are “positive” for each of the measured
+  - Mean expression of lineage markers in each of these sub-populations
+  - Proportion of cells that are “positive” for each of the measured
     signaling markers (which we implement as being above a certain
     threshold).
 
@@ -153,11 +152,11 @@ We do this below using a variety of clustering techniques to define the
 clusters from which we are extracting ddpr features including the
 following:
 
--   developmental classification (using mahalanobis distance)
--   flowsom clustering (using surface markers)
--   flowsom clustering using the mahalanobis distances from single-cell
+  - developmental classification (using mahalanobis distance)
+  - flowsom clustering (using surface markers)
+  - flowsom clustering using the mahalanobis distances from single-cell
     classification
--   flowsom clustering using the cosine distances from single-cell
+  - flowsom clustering using the cosine distances from single-cell
     classification
 
 The result, a tibble with a list-col containing the extracted features,

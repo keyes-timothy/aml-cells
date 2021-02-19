@@ -48,7 +48,7 @@ marker_setup()
 patient_setup()
 
 # Misc globals for running different parts of this vignette
-is_sampled <- TRUE
+is_sampled <- FALSE
 aml_path <- here::here("data", "aml_data_clustered.rds")
 all_path <- here::here("data", "all_data_clustered.rds")
 sample_string <- ""
@@ -153,13 +153,22 @@ The result, a tibble with a list-col containing the extracted features, will be 
 ```{r, warning = FALSE, message = FALSE}
 ddpr_feature_matrices <- 
   tibble(
-    threshold = c(5, 10, 20, 50, 100), 
+    threshold = asinh(c(5, 10, 20, 50, 100)), 
     features_mahalanobis = 
       map(
         .x = threshold, 
         .f = ~ 
           aml_iterate_ddpr_extraction(
             cluster_col = mahalanobis_cluster, 
+            threshold = .x
+          )
+      ),
+    features_cos =
+      map(
+        .x = threshold, 
+        .f = ~ 
+          aml_iterate_ddpr_extraction(
+            cluster_col = cosine_cluster, 
             threshold = .x
           )
       ),
@@ -361,7 +370,7 @@ One way of doing this is to calculate the Earth Mover's Distance(EMD) between th
 Note that calculating the EMD is very computationally expensive. A single EMD calculation for one set of clusters (on heavily sampled data) takes about 14 minutes locally.
 
 
-```{r}
+```{r, eval = FALSE}
 emd_feature_matrices <- 
   list(
     ddpr_mahalanobis = 
@@ -452,3 +461,6 @@ write_rds(
     )
 )
 ```
+
+
+

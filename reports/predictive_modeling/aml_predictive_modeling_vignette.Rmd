@@ -29,7 +29,6 @@ call_libraries(libraries)
 
 # Parameters
 set_global_variables(locale = "galaxia")
-md_path <- here::here("data-raw", "AML_metadata.xlsx")
 
 CLUSTER_OUTPUT <- here::here("data", "cancer_data_clustered.rds")
 
