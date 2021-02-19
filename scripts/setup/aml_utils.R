@@ -23,7 +23,7 @@ call_libraries <- function(libraries) {
       
       # if not installed from CRAN, install from Bioconductor
       if (!require(library, character.only = TRUE)) {
-        suppressWarnings(source('http://bioconductor.org/biocLite.R')(library))
+        suppressWarnings(BiocManager::install(library))
       }
     }
   }
@@ -435,7 +435,127 @@ load_cancer_data <-
 # Outputs:
 #
 # Side-effects: 
+aml_iterate_ddpr_extraction <- function(cluster_col, threshold) { 
+  
+  result <- 
+    tof_extract_ddpr(
+      healthy_tibble = healthy_tibble, 
+      cancer_tibble = cancer_tibble,
+      cluster_col = {{cluster_col}}, 
+      stimulation_col = stimulation, 
+      lineage_cols = any_of(SURFACE_MARKERS), 
+      signaling_cols = any_of(SIGNALING_MARKERS), 
+      threshold = threshold
+    )
+  
+  result
+}
 
+#### aml_extract_lineage_features() ####
+# Description: 
+#
+# Inputs: 
+#     - 
+#     - 
+#     -
+#     - 
+#
+# Outputs:
+#
+# Side-effects: 
+aml_extract_lineage_features <-
+  function(cluster_col, central_tendency) {
+    lineage_features <- 
+      aml_data %>% 
+      group_by(patient, condition) %>% 
+      select(
+        {{cluster_col}},
+        any_of(c(SURFACE_MARKERS, TRX_FACTORS, OTHER_MARKERS))
+      ) %>% 
+      extract_feature_ct({{cluster_col}}, central_tendency = central_tendency) %>% 
+      ungroup()
+    
+    basal_signal_features <- 
+      aml_data %>% 
+      filter(stimulation == "Basal") %>% 
+      group_by(patient, condition) %>% 
+      select(
+        {{cluster_col}},
+        any_of(SIGNALING_MARKERS)
+      ) %>% 
+      extract_feature_ct({{cluster_col}}, central_tendency = central_tendency) %>% 
+      ungroup()
+    
+    result <- 
+      lineage_features %>% 
+      left_join(basal_signal_features, by = c("patient", "condition"))
+    
+    result
+  }
+
+#### function_name() ####
+# Description: 
+#
+# Inputs: 
+#     - 
+#     - 
+#     -
+#     - 
+#
+# Outputs:
+#
+# Side-effects: 
+aml_extract_signaling_features_emd <- 
+  function(cluster_col) { 
+    exports <- 
+      c(
+        "extract_feature_signaling", 
+        "extract_feature_signaling_emd", 
+        "tof_find_emd",
+        "tof_find_density", 
+        "SIGNALING_MARKERS"
+      )
+    
+    emd_features <- 
+      aml_data %>% 
+      mutate(cluster_col = {{cluster_col}}) %>% 
+      group_by(patient, condition) %>% 
+      nest()
+    
+    # kind of hack-y, but will cause the extract_feature_signaling
+    # function to look for the cluster_col column later instead of the 
+    # original data variable, which foreach can't find (not sure why)
+    cluster_col <- enquo(cluster_col)
+    
+    my_cluster <- parallel::makeCluster(14)
+    registerDoParallel(my_cluster, 14)
+    
+    features <- 
+      foreach(
+        my_tibble = emd_features$data, 
+        .packages = 
+          c("dplyr", "purrr", "tidyr", "emdist", "rlang", "stringr"), 
+        .export = exports
+      ) %dopar% 
+      extract_feature_signaling(
+        tof_tibble = my_tibble,
+        method = "emd",
+        cluster_col = cluster_col,
+        stimulation_col = stimulation,
+        signaling_cols = all_of(SIGNALING_MARKERS),
+        basal_level = "Basal"
+      )
+    
+    parallel::stopCluster(my_cluster)
+    
+    emd_features <- 
+      emd_features %>% 
+      ungroup() %>% 
+      transmute(patient, condition, features = features) %>% 
+      unnest(cols = features)
+    
+    emd_features
+  }
 
 
 #### function_name() ####
@@ -450,16 +570,170 @@ load_cancer_data <-
 # Outputs:
 #
 # Side-effects: 
+aml_extract_lineage_emd <- function(cluster_col, central_tendency) {
+  
+  result <- 
+    aml_extract_lineage_features({{cluster_col}}, central_tendency) %>% 
+    left_join(aml_extract_signaling_features_emd({{cluster_col}}))
+  
+  result
+  
+}
+
+#### function_name() ####
+# Description: 
+#
+# Inputs: 
+#     - 
+#     - 
+#     -
+#     - 
+#
+# Outputs:
+#
+# Side-effects: 
+aml_extract_signaling_features_js <- function(cluster_col) { 
+  
+  result <- 
+    aml_data %>% 
+    group_by(patient, condition) %>% 
+    extract_feature_signaling_js(
+      cluster_col = {{cluster_col}}, 
+      stimulation_col = stimulation, 
+      signaling_cols = all_of(SIGNALING_MARKERS), 
+      basal_level = "Basal"
+    )
+  
+  result
+}
+
+#### function_name() ####
+# Description: 
+#
+# Inputs: 
+#     - 
+#     - 
+#     -
+#     - 
+#
+# Outputs:
+#
+# Side-effects: 
+aml_extract_lineage_js <- function(cluster_col, central_tendency) {
+  
+  result <- 
+    aml_extract_lineage_features({{cluster_col}}, central_tendency) %>%
+    left_join(aml_extract_signaling_features_js({{cluster_col}}))
+  
+  result
+  
+}
+
+#### function_name() ####
+# Description: 
+#
+# Inputs: 
+#     - 
+#     - 
+#     -
+#     - 
+#
+# Outputs:
+#
+# Side-effects:
+aml_split_cv <- 
+  function(feature_tibble, num_bootstraps) { 
+    boots <- 
+      feature_tibble %>% 
+      bootstraps(times = num_bootstraps, strata = outcome)
+    
+    boots
+  }
+
+
+#### function_name() ####
+# Description: 
+#
+# Inputs: 
+#     - 
+#     - 
+#     -
+#     - 
+#
+# Outputs:
+#
+# Side-effects:
 
 
 
+#### function_name() ####
+# Description: 
+#
+# Inputs: 
+#     - 
+#     - 
+#     -
+#     - 
+#
+# Outputs:
+#
+# Side-effects:
+aml_create_recipe <- 
+  function(feature_tibble, type = c("full", "baseline")) { 
+    rlang::arg_match(type)
+    
+    if (type == "baseline") {
+      aml_recipe <- 
+        feature_tibble %>% 
+        transmute(
+          outcome = as.factor(outcome), 
+          age, 
+          wbc
+        ) %>% 
+        recipe(outcome ~ .) %>% 
+        step_normalize(-outcome)
+    }
+    
+    if (type == "full") {
+      aml_recipe <- 
+        feature_tibble %>% 
+        mutate(outcome = as.factor(outcome)) %>% 
+        recipe(formula = outcome ~ .) %>% 
+        step_rm(
+          patient, condition, 
+          fab_category, cns_disease, 
+          primary_cytogenetic_code, 
+          cytogenetic_complexity
+        ) %>% 
+        step_normalize(-outcome)
+    }
+  }
 
 
+#### function_name() ####
+# Description: 
+#
+# Inputs: 
+#     - 
+#     - 
+#     -
+#     - 
+#
+# Outputs:
+#
+# Side-effects:
 
-
-
-
-
-
-
-
+# CURRENTLY EXPERIMENTAL; DO NOT USE
+aml_create_model <-
+  function(feature_tibble, type = c("logistic_regression", "survival_regression")) { 
+    rlang::arg_match(type)
+    
+    if (type == "logistic_regression") {
+      ddpr_en_model_spec <- 
+        logistic_reg(penalty = tune(), mixture = 1) %>%
+        set_engine("glmnet") %>% 
+        set_mode("classification")
+      
+    }
+    
+  }

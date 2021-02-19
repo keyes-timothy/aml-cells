@@ -13,7 +13,7 @@ library(tidyverse)
 
 # source files
 source(here::here("scripts", "setup", "aml_utils.R"))
-source(file.path("~", "GitHub", "tidyTOF", "tof_read_fcs.R"))
+#source(file.path("~", "GitHub", "tidyTOF", "tof_read_fcs.R"))
 
 # Parameters
 set_global_variables(locale = "galaxia")

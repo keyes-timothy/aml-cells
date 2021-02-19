@@ -20,7 +20,8 @@ libraries <-
     "rlang", 
     "ggthemes", 
     "doParallel", 
-    "vip"
+    "vip", 
+    "tidytof"
   )
 
 source(here::here("scripts", "setup", "aml_utils.R")) 
@@ -29,12 +30,8 @@ call_libraries(libraries)
 # Parameters
 set_global_variables(locale = "galaxia")
 md_path <- here::here("data-raw", "AML_metadata.xlsx")
-tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
 
 CLUSTER_OUTPUT <- here::here("data", "cancer_data_clustered.rds")
-
-# Sourcing tidyTOF functions
-source_tidyTOF(tidyTOF_directory)
 
 # set up aml marker and patient information
 marker_setup()
@@ -47,12 +44,21 @@ mah_citrus_path <- here::here("data", "mahalanobis_citrus_features.rds")
 cos_citrus_path <- here::here("data", "cosine_citrus_features.rds")
 md_path <- here::here("data", "md.rds")
 
+ddpr_feature_path <- 
+  here::here("data", "patient-level_feature_matrices", "ddpr_feature_matrices.rds")
+mean_feature_path <- 
+  here::here("data", "patient-level_feature_matrices", "mean_feature_matrices_sampled.rds")
+emd_feature_path <- 
+  here::here("data", "patient-level_feature_matrices", "emd_feature_matrices.rds")
+js_feature_path <- 
+  here::here("data", "patient-level_feature_matrices", "js_feature_matrices.rds")
+
+
 DDPR_PROP <- 0.8
 
 # set a randomness seed to make everything reproducible 
-
-set.seed(2020)
-
+seed <- 12
+set.seed(seed)
 ```
 
 # Reading in data
@@ -61,16 +67,22 @@ First, I read in the data that I've extracted from the AML dataset. (I also load
 
 The data have already been pre-processed according to the procedure described [here](https://github.com/keyes-timothy/aml-cells/blob/master/reports/aml_intro_vignette.md), and patient-level features have been extracted from the single-cell data according to the procedure described [here](https://github.com/keyes-timothy/aml-cells/blob/master/reports/aml_feature_extraction_vignette.md). 
 
+## First gen feature extraction
+
 ```{r}
 # read in metadata
-metadata <- 
-  md_path %>% 
-  read_rds() %>% 
+metadata <-
+  md_path %>%
+  read_rds() %>%
   transmute(
     patient, 
     age = age_at_diagnosis_in_days, 
     wbc = wbc_at_diagnosis, 
-    outcome = first_event %>% str_replace("Censored", "Non-relapse")
+    outcome = first_event %>% str_replace("Censored", "Non-relapse"), 
+    fab_category, 
+    cns_disease, 
+    primary_cytogenetic_code, 
+    cytogenetic_complexity
   )
 
 # reading in mahalanobis distance-classified AML data
@@ -107,6 +119,27 @@ cos_citrus_data <-
 ```
 
 
+## Second-gen feature extraction
+
+```{r}
+all_feature_matrices <- 
+  tibble(
+    method = c(ddpr_feature_path, mean_feature_path, emd_feature_path, js_feature_path), 
+    matrix = map(.x = method, .f = read_rds)
+  ) %>% 
+  mutate(
+    method = 
+      str_remove(
+        string = method, 
+        pattern = here::here("data", "patient-level_feature_matrices/")
+      ) %>% 
+      str_extract("^[:alpha:]+")
+  )
+
+all_feature_matrices
+```
+
+
 # Very quick EDA
 
 Before any predictive modeling, it's good practice to do a little bit of exploratory data analysis (EDA) just to make sure you know what you're looking at and what you should expect from your model. I give what amounts to essentially the bare minimum of EDA here just to illustrate a few points that are on my mind about the AML dataset...
@@ -128,7 +161,6 @@ Here are some PCA plots showing how well our samples can be separated in two dim
 
 ```{r}
 # needs to show the percentage variance for each PC in the plot
-
 pca_recipe <- 
   recipe(
     ~., 
@@ -147,13 +179,14 @@ pca_result <- juice(pca_prep)
 pca_result %>% 
   ggplot(aes(x = PC1, y = PC2, color = outcome)) + 
   geom_point(size = 3, alpha = 0.7) + 
-  labs(title = "Developmental Classifier Features using Mahalanobis Distance")
+  labs(title = "Developmental Classifier Features using\nMahalanobis Distance")
 ```
 
 And here is some code that plots features in a way that we can try to interpret later (we will return to this after the modeling steps). 
 
-```{r, eval = TRUE, warning = FALSE}
+```{r eval=FALSE, warning=FALSE}
 mah_dev_data %>% 
+  select(where(is_numeric), patient, condition, outcome) %>% 
   pivot_longer(
     cols = c(-patient, -condition, -outcome), 
     names_to = "feature", 
@@ -181,15 +214,15 @@ mah_dev_data %>%
 
 ```
 
-From these more or less randomly sampled plots, I hope to illustrate a trend for many of our features - that most of them are right-skewed (aka most patients have relatively low values within the same(ish) range, but several patients will be quite a bit higher than the others on each feature). 
+From these more or less randomly sampled plots, I hope to illustrate a trend for many of our features - that most of them are left-skewed (aka most patients have relatively low values within the same(ish) range, but several patients will be quite a bit higher than the others on each feature). 
 
 Here is a bit more evidence of this: 
 
-```{r}
+```{r, message = FALSE, warning = FALSE}
 density_data <- 
   mah_dev_data %>% 
-  mutate(across(.cols = where(is.numeric), scale)) %>%
-  select(-patient, -condition, -outcome) %>% 
+  dplyr::mutate(across(.cols = where(is.numeric), .fns = scale)) %>%
+  select(where(is.numeric)) %>% 
   pivot_longer(
     cols = everything(), 
     names_to = "channel", 
@@ -208,7 +241,6 @@ We can make the same PCA plot as above for the classifier data that was classifi
 
 ```{r}
 # needs to show the percentage variance for each PC in the plot
-
 pca_recipe <- 
   recipe(
     ~., 
@@ -235,7 +267,7 @@ pca_result %>%
 density_data <- 
   cos_dev_data %>% 
   mutate(across(.cols = where(is.numeric), scale)) %>%
-  select(-patient, -condition, -outcome) %>% 
+  dplyr::select(where(is.numeric)) %>% 
   pivot_longer(
     cols = everything(), 
     names_to = "channel", 
@@ -259,16 +291,89 @@ Because this dataset has been earmarked for discovery, we are not going to divid
 If we repeat this cross-validation strategy multiple times (**repeated cross-validation**), we can try to get around our small sample size by simulating access to multiple datasets. This overall procedure is sometimes referred to as "resampling" in the statistics world. The package {rsample} makes this process really painless in R.
 
 ```{r}
+#bootstrapping approach
+mah_dev_split <- 
+  initial_split(mah_dev_data, strata = outcome)
+  
+mah_dev_train <- training(mah_dev_split)
+
+mah_dev_test <- testing(mah_dev_split)
+
+mah_dev_boots <- 
+  mah_dev_data %>% 
+  bootstraps(times = 1000, strata = outcome)
+
+mah_dev_boots
+
+
+# cross validation approach 
 mah_dev_cv <- 
   mah_dev_data %>% 
-  vfold_cv(v = 5, repeats = 10, strata = outcome) 
+  vfold_cv(v = 5, repeats = 100, strata = outcome) 
 
 cos_dev_cv <- 
   cos_dev_data %>% 
-  vfold_cv(v = 5, repeats = 10, strata = outcome)
+  vfold_cv(v = 5, repeats = 100, strata = outcome)
 
 mah_dev_cv
 ```
+
+```{r}
+resampling_df <- 
+  mah_dev_boots %>% 
+  tidy() %>% 
+  mutate(
+    resample = str_sub(Resample, start = -3L) %>% as.integer(), 
+    Data = fct_recode(Data, "Training" = "Analysis", "Test" = "Assessment")
+  ) %>% 
+  filter(resample <= 20) 
+
+resampling_figure <- 
+  resampling_df %>% 
+  ggplot(aes(x = resample, y = Row, fill = Data)) + 
+  geom_tile(color = "black", size = 0.4) + 
+  geom_linerange(
+    aes(
+      ymin = min(Row) - 0.55, 
+      ymax = max(Row) + 0.55
+    ), 
+    x = 0 + 0.5, 
+    size = 3, 
+    color = "white"
+  ) + 
+  geom_linerange(
+    aes(
+      ymin = min(Row) - 0.55, 
+      ymax = max(Row) + 0.55,
+      x = resample + 0.5
+    ), 
+    size = 3, 
+    color = "white"
+  ) + 
+  labs(
+    x = "Bootstrap iteration", 
+    y = "Patient", 
+    fill = NULL
+  ) + 
+  theme_minimal() + 
+  theme(
+    axis.title = element_text(size = 20), 
+    axis.text = element_text(size = 12)
+  )
+
+ggsave(
+  filename = "resampling.pdf", 
+  plot = resampling_figure, 
+  path = file.path("~", "Desktop"), 
+  width = 10, 
+  height = 6
+)
+
+resampling_figure
+
+  
+```
+
 
 This data structure will come in handy later. 
 
@@ -278,27 +383,27 @@ I've built my modeling framework in the [{tidymodels}](https://www.tidymodels.or
 
 There's a [new free book](https://www.tmwr.org/) out about tidymodels, which you should check out if you're interested. Or I can just do all of the modeling for your project ;)
 
-First, I use the tidymodels package {recipes} to build a reproducible preprocessing framework for the data. Then, I use {dials} to create a grid (using maximum entropy) over which to search for the optimal elastic net parameters. Then, I use the modeling package {parsnip} to make the model specification (a logistic regression model with elastic net regularization). Finally, I incorporate each of these steps into a single workflow using the package {workflows}. 
+First, I use the tidymodels package `{recipes}` to build a reproducible preprocessing framework for the data. Then, I use `{dials}` to create a grid (using maximum entropy) over which to search for the optimal elastic net parameters. Then, I use the modeling package {parsnip} to make the model specification (a logistic regression model with elastic net regularization). Finally, I incorporate each of these steps into a single workflow using the package {workflows}. 
 
 ```{r}
 # preprocessing
 ddpr_dev_recipe <- 
   mah_dev_data %>% 
-  mutate(outcome = as.factor(outcome)) %>% 
-  recipe(formula = outcome ~ .) %>% 
-  step_rm(patient, condition) %>% 
-  step_normalize(-outcome)
+  aml_create_recipe(type = "full")
 
-# model turning
+# create grid for parameter tuning
 en_param_grid <-
-  parameters(penalty(), mixture()) %>% 
-  grid_max_entropy(size = 100)
+  parameters(penalty()) %>%
+  grid_regular(levels = 50)
+  
+  #, mixture()) %>% 
+  #grid_max_entropy(size = 100)
   # an alternative would be a regular grid, but this is slower
   # grid_regular(levels = c(5, 5))
 
 # model specification
 ddpr_en_model_spec <- 
-  logistic_reg(penalty = tune(), mixture = tune()) %>%
+  logistic_reg(penalty = tune(), mixture = 1) %>%
   set_engine("glmnet") %>% 
   set_mode("classification")
 
@@ -307,7 +412,40 @@ ddpr_en_workflow <-
   workflow() %>% 
   add_recipe(ddpr_dev_recipe) %>% 
   add_model(ddpr_en_model_spec)
+
+# null model
+null_recipe <-
+  mah_dev_data %>% 
+  transmute(
+    outcome = as.factor(outcome), 
+    age, 
+    wbc
+  ) %>%
+  recipe(outcome ~ .) %>% 
+  step_normalize(-outcome)
+
+ddpr_null_model_spec <- 
+  logistic_reg(penalty = 0, mixture = 0) %>%
+  set_engine("glmnet") %>% 
+  set_mode("classification")
+  
+ddpr_null_workflow <- 
+  workflow() %>% 
+  add_recipe(null_recipe) %>% 
+  add_model(ddpr_null_model_spec)
+  
 ```
+
+```{r}
+ddpr_dev_recipe
+
+en_param_grid
+ 
+ddpr_en_model_spec
+
+ddpr_en_workflow
+```
+
 
 # Tune the model
 
@@ -321,6 +459,7 @@ With these initial pieces, I can use the {tune} package to fit thousands of mode
 my_cluster <- makeCluster(14)
 registerDoParallel(my_cluster)
 
+# cv approach 
 ddpr_en_tune <- 
   tune_grid(
     ddpr_en_workflow, 
@@ -330,132 +469,216 @@ ddpr_en_tune <-
 
 stopCluster(my_cluster)
 
+# bootstrapping approach
+
+my_cluster <- makeCluster(14)
+registerDoParallel(my_cluster)
+
+ddpr_en_tune_boot <- 
+  tune_grid(
+    ddpr_en_workflow, 
+    resamples = mah_dev_boots, 
+    grid = en_param_grid
+  )
+
+stopCluster(my_cluster)
+
 ```
 
-This gives us a massive nested tibble that will have accuracy metrics for each fold and each repetition of the resampling procedure. Together, these should give us a good estimate of which hyperparameters work best for the model. 
-
-Our strategy here will be to take each repetition and consider it separately. Specifically, we will
-
-1) For each repetition, find the hyperparameter values associated with the highest accuracy across all folds. That is, calculate the model accuracy across all folds for each hyperparameter set and pick the one that has the highest average performance as "optimal." 
-1) If there are any ties, pick the model with the highest penalty (the **maximum parsimony** principle). If there is still a tie, pick the model with the highest L1 regularization (Lasso penalty). Both of these tie-breakers will result in simpler, sparser models (models with fewer predictors). 
-1) Refit the original dataset using the "optimal" hyperparameters from each repetition and interrogate those models.  
-
-
 ```{r}
-optimal_metrics <- 
-  ddpr_en_tune %>% 
-  unnest(cols = .metrics) %>% 
-  filter(.metric == "accuracy") %>% 
-  rename(repetition = id, fold = id2) %>% 
-  group_by(repetition, penalty, mixture) %>% 
-  summarize(mean_accuracy = mean(.estimate)) %>% 
-  group_by(repetition, .add = FALSE) %>% 
-  slice_max(order_by = mean_accuracy, n = 1) %>% 
-  slice_max(order_by = penalty, n = 1) %>% 
-  slice_max(order_by = mixture, n = 1) %>% 
-  ungroup()
 
-optimal_metrics
-```
-
-From this, we can see that the estimates are a bit all-over-the-place, which makes sense, because our N is small, our samples comes from a very diverse underlying population (all AML patients). 
-
-A visualization: 
-
-```{r}
-optimal_metrics %>% 
-  mutate(
-    repetition = fct_reorder(repetition, mean_accuracy, .desc = TRUE)
-  ) %>% 
-  ggplot(aes(x = repetition, y = mean_accuracy)) + 
-  geom_hline(
-    yintercept = mean(optimal_metrics$mean_accuracy), 
-    color = "red", 
-    linetype = "dashed", 
-    size = 1
+# cross validation approach
+ddpr_en_tune %>% 
+  # will give the average for each model across all repetitions and all folds
+  collect_metrics() %>% 
+  ggplot(aes(x = penalty, y = mean, color = .metric)) + 
+  geom_errorbar(
+    aes(ymin = mean - std_err, ymax = mean + std_err), 
+    alpha = 0.5
   ) + 
-  geom_pointrange(aes(ymax = mean_accuracy, ymin = 0), size = 1) +
-  annotate(
-    geom = "text",
-    x = 
-      fct_reorder(
-        optimal_metrics$repetition, 
-        optimal_metrics$mean_accuracy, 
-        .desc = TRUE
-      ) %>% 
-      levels() %>% 
-      last(),
-    y = mean(optimal_metrics$mean_accuracy) + 0.02,
-    label = str_c((mean(optimal_metrics$mean_accuracy) * 100) %>% round(1), "%"),
-    color = "red", 
-    size = 4
-  ) +
-  scale_y_continuous(labels = scales::label_percent(accuracy = 1)) + 
-  labs(x = NULL, y = "Mean accuracy across CV folds") + 
-  theme_light()
+  geom_line(size = 1.5) + 
+  facet_grid(rows = vars(.metric), scales = "free") + 
+  scale_x_log10()
+
+
+### bootstrapping approach
+
+tuning_curve <- 
+  ddpr_en_tune_boot %>% 
+  # will give the average for each model across all repetitions and all folds
+  collect_metrics() %>% 
+  mutate(.metric = fct_recode(.metric, "AuROC" = "roc_auc")) %>% 
+  ggplot(aes(x = penalty, y = mean, color = .metric)) + 
+  geom_errorbar(
+    aes(ymin = mean - std_err, ymax = mean + std_err), 
+    alpha = 0.5
+  ) + 
+  geom_line(size = 1.5) + 
+  facet_grid(rows = vars(.metric), scales = "free") + 
+  scale_x_log10() + 
+  theme(legend.position = "None") + 
+  labs(
+    y = NULL, 
+    color = NULL, 
+    caption = "Performance metrics are computed across all bootstrap resamples"
+  )
+
+tuning_curve
+
+ggsave(
+  filename = "tuning_curve.pdf", 
+  plot = tuning_curve, 
+  path = file.path("~", "Desktop"), 
+  width = 6, 
+  height = 5
+)
+
+ddpr_en_tune_boot %>% 
+  collect_metrics()
+  
 ```
 
-This can help us understand the accuracy of our model across the 10 different resamplings. 
+
+```{r}
+### cross validation approach
+
+highest_accuracy <- 
+  ddpr_en_tune %>% 
+  select_best(metric = "accuracy")
+
+highest_auc <- 
+  ddpr_en_tune %>% 
+  select_best(metric = "roc_auc")
+
+highest_accuracy
+
+highest_auc
+
+```
+
+```{r}
+### bootstrapping approach
+
+highest_accuracy_boot <- 
+  ddpr_en_tune_boot %>% 
+  select_best(metric = "accuracy")
+
+highest_auc_boot <- 
+  ddpr_en_tune_boot %>% 
+  select_best(metric = "roc_auc")
+
+highest_accuracy_boot
+
+highest_auc_boot
+
+```
+
+```{r}
+### cross validation approach
+final_lasso <- 
+  ddpr_en_workflow %>% 
+  finalize_workflow(parameters = highest_auc)
+
+final_lasso
+
+### bootstrapping approach
+
+final_lasso_boot <- 
+  ddpr_en_workflow %>% 
+  finalize_workflow(parameters = highest_auc_boot)
+
+final_lasso_boot
+
+```
 
 # Fitting the whole model(s) 
 
-So, now we have 10 resamplings' worth of models, each of which has identified some optimal parameters for fitting the model. So, what do we do now? 
-
-We have to go back to the original dataset and fit each of these models on the entire dataset. From there, we can start asking questions about which of the features are most important across all of our folds and resamplings - the idea is that features that come up multiple times represent the most interesting candidates for us to interrogate further. 
-
 ```{r}
-optimal_metrics <- 
-  optimal_metrics %>% 
-  mutate(
-    models = 
-      map2(
-        .x = penalty, 
-        .y = mixture, 
-        .f = ~
-          finalize_workflow(
-            x = ddpr_en_workflow, 
-            parameters = tibble(penalty = .x, mixture = .y)
-          ) %>% 
-          fit(object = ., data = mah_dev_data)
-      ),
-    importance_scores =
-      map(
-        .x = models, 
-        .f = ~ 
-          .x %>%
-          pluck("fit") %>%
-          pluck("fit") %>%
-          vi()
-      )
+### cross validation
+feature_importance <- 
+  final_lasso %>% 
+  fit(data = mah_dev_data) %>% 
+  pull_workflow_fit() %>% 
+  vi(lambda = highest_auc$penalty) %>% 
+  mutate(Importance = abs(Importance), Variable = fct_reorder(Variable, Importance)) %>% 
+  filter(Importance > 0)
+
+feature_importance %>% 
+  ggplot(aes(x = Importance, y = Variable, fill = Sign)) + 
+  geom_col() + 
+  scale_x_continuous(expand = c(0, 0))
+
+
+
+### bootstrapping approach
+
+feature_importance_boot <- 
+  final_lasso_boot %>% 
+  fit(data = mah_dev_train) %>% 
+  pull_workflow_fit() %>% 
+  vi(lambda = highest_auc$penalty) %>% 
+  mutate(Importance = abs(Importance), Variable = fct_reorder(Variable, Importance)) %>% 
+  filter(Importance > 0)
+
+feature_importance_plot <- 
+  feature_importance_boot %>% 
+  ggplot(aes(x = Importance, y = Variable, fill = Sign)) + 
+  geom_col() + 
+  scale_x_continuous(expand = c(0, 0)) + 
+  labs(
+    y = NULL
   )
 
+ggsave(
+  filename = "feature_importance_plot.pdf", 
+  plot = feature_importance_plot, 
+  path = file.path("~", "Desktop"), 
+  width = 4, 
+  height = 4
+)
 
-coefficient_counts <- 
-  optimal_metrics %>% 
-  pull(importance_scores) %>% 
-  map(
-    .x = ., 
-    .f = ~
-      .x %>% 
-      slice_max(order_by = Importance, n = 10) %>% 
-      pull(Variable)
-  ) %>% 
-  flatten_chr() %>% 
-  tibble(variable = .) %>% 
-  count(variable) %>% 
-  arrange(desc(n))
+feature_importance_plot
 
-coefficient_counts
+
 ```
 
-We can see that some features come up in most of the 10 resamplings and others don't...
+
+
+The most important features...
 
 ```{r}
+# cross validation
 coefficient_names <- 
-  coefficient_counts %>% 
-  pull("variable")
+  feature_importance %>% 
+  pull(Variable) %>% 
+  as.character()
 
 coefficient_names
+
+# bootstrap approach
+
+coefficient_names_boot <- 
+  feature_importance_boot %>% 
+  pull(Variable) %>% 
+  as.character()
+
+coefficient_names_boot
+
+
+```
+
+
+```{r}
+coefficient_names_boot %>% 
+  write_rds(
+    x = ., 
+    file = 
+      here::here(
+        "data", 
+        "modeling_logistic", 
+        str_c("mah_dev_feature_names_boot_", seed, "_", ".rds")
+      )
+  )
 ```
 
 
@@ -463,6 +686,7 @@ And a visualization of the most predictive features:
 
 ```{r}
 mah_dev_data %>% 
+  select(where(is.numeric), patient, condition, outcome) %>%
   pivot_longer(
     cols = c(-patient, -condition, -outcome), 
     names_to = "feature", 
@@ -485,7 +709,7 @@ mah_dev_data %>%
           labs(title = feature, x = "patient", y = "expression level")
       )
   ) %>% 
-  filter(feature %in% coefficient_names) %>% 
+  filter(feature %in% coefficient_names_boot) %>% 
   pull(plots) %>% 
   walk(print)
 ```
@@ -493,36 +717,171 @@ mah_dev_data %>%
 From there, we can use our models that were fit on the entire dataset and see where they performed best.  
 
 ```{r}
+
 perf_metrics <- metric_set(accuracy, sens, spec, f_meas)
 
-performance_metrics <- 
-  optimal_metrics %>% 
+
+# null model 
+
+roc_predictions_null <-
+  mah_dev_boots %>% 
   mutate(
     predictions = 
       map(
-        .x = models, 
-        .f = ~
-          predict(object = .x, new_data = mah_dev_data)
-      ), 
-    performance_metrics =
-      map(
-        .x = predictions,
-        .f = ~
-          .x %>%
-          mutate(truth = as.factor(mah_dev_data$outcome)) %>%
-          perf_metrics(
-            truth = truth,
-            estimate = .pred_class
+        .x = splits, 
+        .f = ~ 
+          fit(ddpr_null_workflow, data = select(training(.x), outcome, wbc, age)) %>% 
+          predict(new_data = select(testing(.x), age, wbc, outcome), type = "prob") %>% 
+          transmute(
+            estimate = .pred_Relapse, 
+            truth = factor(testing(.x)$outcome, levels = c("Relapse", "Non-relapse"))
           )
-      )
+      ), 
+    class = map(
+      .x = splits,
+      .f = ~
+        fit(ddpr_null_workflow, data = select(training(.x), outcome, wbc, age)) %>%
+        predict(new_data = select(testing(.x), age, wbc, outcome), type = "class") %>%
+        transmute(
+          class_prediction = .pred_class,
+        )
+    )
+  ) %>% 
+  unnest(cols = c(predictions, class))
+
+
+# actual model
+roc_predictions <- 
+  mah_dev_boots %>% 
+  mutate(
+    predictions = 
+      map(
+        .x = splits, 
+        .f = ~ 
+          fit(final_lasso_boot, data = training(.x)) %>% 
+          predict(new_data = testing(.x), type = "prob") %>% 
+          transmute(
+            estimate = .pred_Relapse, 
+            truth = factor(testing(.x)$outcome, levels = c("Relapse", "Non-relapse"))
+          )
+      ), 
+    class = map(
+      .x = splits,
+      .f = ~
+        fit(final_lasso_boot, data = training(.x)) %>%
+        predict(new_data = testing(.x), type = "class") %>%
+        transmute(
+          class_prediction = .pred_class,
+        )
+    )
+  ) %>% 
+  unnest(cols = c(predictions, class))
+
+```
+
+```{r}
+# plot ROC curves
+
+null_roc <- 
+  roc_predictions_null %>% 
+  roc_curve(truth, estimate) %>% 
+  ggplot(aes(x = 1 - specificity, sensitivity)) + 
+  geom_path() + 
+  geom_abline(lty = 3) + 
+  coord_equal() + 
+  theme_bw() + 
+  labs(
+    title = "Baseline model ROC curve", 
+    subtitle = "Model only includes patient age and WBC count"
   )
 
-performance_metrics %>% 
-  pull(performance_metrics) %>% 
-  bind_rows() %>% 
-  select(-.estimator) %>% 
-  group_by(.metric) %>% 
-  summarize(.estimate = mean(.estimate))
+boot_roc <- 
+  roc_predictions %>% 
+  roc_curve(truth, estimate) %>% 
+  ggplot(aes(x = 1 - specificity, sensitivity)) + 
+  geom_path() + 
+  geom_abline(lty = 3) + 
+  coord_equal() + 
+  theme_bw() + 
+  labs(
+    title = "Lasso model ROC curve", 
+    subtitle = "Model includes Lasso-identified features"
+  )
+
+null_roc
+
+boot_roc
+
+# save ROC curves
+
+ggsave(
+  filename = "null_roc.pdf", 
+  plot = null_roc, 
+  path = file.path("~", "Desktop"), 
+  width = 5, 
+  height = 5
+)
+
+ggsave(
+  filename = "boot_roc.pdf", 
+  plot = boot_roc, 
+  path = file.path("~", "Desktop"), 
+  width = 5, 
+  height = 5
+)
+
+bootstrap_performance_metrics <- 
+  roc_predictions %>% 
+  perf_metrics(truth = fct_rev(truth), estimate = class_prediction) %>% 
+  mutate(model = "lasso")
+
+null_performance_metrics <- 
+  roc_predictions_null %>% 
+  perf_metrics(truth = fct_rev(truth), estimate = class_prediction) %>% 
+  mutate(model = "null") 
+
+performance_metrics <- 
+  null_performance_metrics %>% 
+  bind_rows(bootstrap_performance_metrics) %>% 
+  select(-.estimator) #%>% 
+  # pivot_wider(
+  #   names_from = .metric, 
+  #   values_from = .estimate
+  # )
+
+
+```
+
+```{r}
+performance_metrics_plot <- 
+  performance_metrics %>% 
+  mutate(
+    .metric = 
+      fct_recode(.metric, "sensitivity" = "sens", "specificity" = "spec", "F-measure" = "f_meas") %>% 
+      fct_relevel("accuracy", "sensitivity", "specificity", "F-measure")
+  ) %>% 
+  ggplot(aes(x = model, y = .estimate, fill = model)) + 
+  geom_col() + 
+  facet_grid(cols = vars(.metric), scales = "free") + 
+  labs(
+    x = NULL, 
+    y = NULL, 
+    caption = "Calculated on all OOB observations across all bootstrap samples"
+  )
+
+ggsave(
+  filename = "performance_metrics.pdf", 
+  plot = performance_metrics_plot, 
+  path = file.path("~", "Desktop"), 
+  width = 5, 
+  height = 4
+)
+
+
+performance_metrics_plot
+
+
+
 ```
 
 In general, we can see that, on average, each of the resampled models (when rerun on all the data) give us good sensitivity and *decent* specificity. Recall that 
@@ -554,18 +913,352 @@ pca_result %>%
   mutate(outcome = fct_rev(outcome)) %>% 
   ggplot(aes(x = PC1, y = PC2, color = outcome)) + 
   geom_point(size = 3, alpha = 0.7) + 
-  labs(title = "Developmental Classifier Features using Mahalanobis Distance")
+  labs(title = "Developmental Classifier Features using \nMahalanobis Distance")
 ```
 
 
 Finally, we store the vector containing the name of the most-predictive features in its own file so that we can reference it later. 
 
 ```{r}
-coefficient_names %>% 
+coefficient_names_boot %>% 
   write_rds(
     x = ., 
-    file = here::here("data", "modeling_logistic", "mah_dev_feature_names.rds")
-  ) 
+    file = 
+      here::here(
+        "data", 
+        "modeling_logistic", 
+        str_c("mah_dev_feature_names_boot_", seed, "_", ".rds")
+      )
+  )
+```
+
+
+# Survival modeling with the same features
+
+```{r}
+metadata <- 
+  md_path %>% 
+  read_rds() %>% 
+  transmute(
+    patient, 
+    event_free_survival_time = event_free_survival_time_in_days,
+    first_event,
+    aml0531_risk = 
+      case_when(
+        inv_16 == "Yes" | t_8_21 == "Yes" ~ "Low", 
+        any(
+          monosomy_5 == "Yes", 
+          monosomy_7 == "Yes", 
+          del5q == "Yes", 
+          !is.na(flt3_itd_allelic_ratio)
+        )                                 ~ "High", 
+        TRUE                              ~ "Intermediate"
+      )
+  )
+
+aml_data <- 
+  mah_dev_data %>% 
+  left_join(metadata) %>% 
+  select(all_of(coefficient_names_boot), event_free_survival_time, first_event, age) %>% 
+  mutate(
+    across(all_of(coefficient_names_boot), scale), 
+    first_event = first_event != "Censored"
+  ) #%>% 
+  #rename(DC_HLA_DR = `DC_HLA-DR`)
+
+aml_data
+```
+
+```{r}
+library(survival)
+library(survminer)
+
+surv_model <- 
+  surv_reg() %>% 
+  set_engine("survival")
+
+# full model
+
+surv_fit <- 
+  surv_model %>% 
+  fit(
+    formula = 
+      reformulate(
+        setdiff(colnames(aml_data), c("event_free_survival_time", "first_event")), 
+        response = "Surv(event_free_survival_time, first_event)"
+      ),
+    data = aml_data
+  )
+
+surv_predictions <- 
+  surv_fit %>% 
+  predict(new_data = aml_data) %>% 
+  mutate(
+    patient = mah_dev_data$patient, 
+    DDPR_high = .pred < median(.pred)
+  )
+
+surv_fit %>% 
+  tidy() %>% 
+  filter(p.value < 0.05)
+
+# null model 
+
+
+null_surv_fit <- 
+  surv_model %>% 
+  fit(
+    formula = Surv(event_free_survival_time, first_event) ~ age + wbc, 
+    data = aml_data
+  )
+
+null_surv_predictions <- 
+  null_surv_fit %>% 
+  predict(new_data = aml_data) %>% 
+  mutate(
+    patient = mah_dev_data$patient, 
+    null_high = .pred < median(.pred)
+  )
+
+surv_fit %>% 
+  tidy() %>% 
+  filter(p.value < 0.05)
+
+```
+
+
+```{r}
+
+# full model
+
+surv_fit_plot <- 
+  survfit(
+    formula = Surv(event_free_survival_time, first_event) ~ DDPR_high, 
+    data = 
+      aml_data %>% 
+      mutate(patient = mah_dev_data$patient) %>% 
+      left_join(surv_predictions) %>% 
+      left_join(metadata %>% select(-first_event, -event_free_survival_time))
+  )
+
+surv_fit_plot %>% 
+  ggsurvplot(
+    size = 1, 
+    conf.int = TRUE, 
+    pval = TRUE 
+  )
+
+surv_formula <- 
+  reformulate(
+        setdiff(colnames(aml_data), c("event_free_survival_time", "first_event")), 
+        response = "Surv(event_free_survival_time, first_event)"
+      )
+
+surv_fit_plot <- 
+  survfit(
+    formula = surv_formula, 
+    data = aml_data
+  )
+ 
+surv_fit_plot_figure <- 
+  surv_fit_plot %>% 
+  ggsurvplot(
+    size = 1, 
+    conf.int = TRUE, 
+    pval = TRUE, 
+    ggtheme = theme_bw()
+  )
+
+surv_fit_plot_figure
+
+ggsave(filename = "surv_fit_plot.pdf", device = "pdf", path = file.path("~", "Desktop"), height = 5, width = 8)
+
+# null model 
+
+surv_fit_plot_null <- 
+  survfit(
+    formula = Surv(event_free_survival_time, first_event) ~ null_high, 
+    data = 
+      aml_data %>% 
+      mutate(patient = mah_dev_data$patient) %>% 
+      left_join(null_surv_predictions) %>% 
+      left_join(metadata %>% select(-first_event, -event_free_survival_time))
+  )
+
+surv_fit_plot_figure_null <- 
+  surv_fit_plot_null %>% 
+  ggsurvplot(
+    size = 1, 
+    conf.int = TRUE, 
+    pval = TRUE, 
+    ggtheme = theme_bw()
+  )
+
+
+
+surv_fit_plot_figure_null
+
+ggsave(filename = "surv_fit_plot_null.pdf", device = "pdf", path = file.path("~", "Desktop"), height = 5, width = 8)
+  
+
+```
+
+
+# plotting features
+
+```{r}
+full_data <- 
+  mah_dev_path %>% 
+  read_rds() %>% 
+  filter(condition %in% c("dx", "rx")) %>% 
+  select(any_of(c(coefficient_names_boot, "patient", "condition"))) %>% 
+  left_join(metadata, by = "patient") %>% 
+  replace(list = is.na(.), values = 0)
+
+diagnosis_feature_plot <- 
+  full_data %>% 
+  mutate(across(any_of(coefficient_names_boot), scale, center = FALSE)) %>% 
+  filter(condition == "dx") %>% 
+  pivot_longer(
+    cols = any_of(coefficient_names_boot), 
+    names_to = "feature", 
+    values_to = "value"
+  ) %>% 
+  group_by(feature, first_event) %>% 
+  summarize(
+    sd = sd(value),
+    value = mean(value), 
+    sem = sd / sqrt(n())
+  ) %>% 
+  #mutate(
+    #feature = str_replace(feature, pattern = "Thrombocyte", replacement = "Thromb"), 
+    #feature = fct_reorder(feature, value)
+  #) %>% 
+  ggplot(aes(x = first_event, y = value, fill = first_event)) + 
+  geom_col(position = "dodge") + 
+  geom_errorbar(aes(ymin = value - sem, ymax = value + sem), width = 0.4, alpha = 0.7) + 
+  facet_wrap(facets = vars(feature), nrow = 2) + 
+  theme_bw() + 
+  theme(
+    axis.ticks.x = element_blank(), 
+    axis.text.x = element_blank(), 
+    legend.position = "bottom"
+  ) + 
+  labs(
+    y = "Mean Feature Value (scaled to SD=1)", 
+    x = NULL, 
+    fill = NULL, 
+    caption = "Error bars indicate SEMs"
+  )
+
+diagnosis_feature_plot
+
+ggsave(
+  filename = "diagnosis_feature_plot.pdf", 
+  plot = diagnosis_feature_plot, 
+  path = file.path("~", "Desktop"), 
+  width = 12, 
+  height = 8
+)
+
+
+
+# do features persist during relapse 
+
+relapse_feature_plot <- 
+  full_data %>% 
+  mutate(across(any_of(coefficient_names_boot), scale, center = FALSE)) %>% 
+  group_by(patient) %>% 
+  filter(n() > 1) %>% 
+  pivot_longer(
+    cols = any_of(coefficient_names_boot), 
+    names_to = "feature", 
+    values_to = "value"
+  ) %>% 
+  group_by(feature, condition) %>% 
+  summarize(
+    sd = sd(value),
+    value = mean(value), 
+    sem = sd / sqrt(n())
+  ) %>% 
+  #mutate(feature = fct_reorder(feature, value)) %>% 
+  ggplot(aes(x = condition, y = value, fill = condition)) + 
+  geom_col(position = "dodge") + 
+  geom_errorbar(aes(ymin = value - sem, ymax = value + sem), width = 0.4, alpha = 0.7) + 
+  facet_wrap(facets = vars(feature), nrow = 2) + 
+  theme_bw() + 
+  theme(
+    axis.ticks.x = element_blank(), 
+    axis.text.x = element_blank(), 
+    legend.position = "bottom"
+  ) + 
+  labs(
+    y = "Mean Feature Value (scaled to SD=1)", 
+    x = NULL, 
+    fill = NULL, 
+    caption = "Error bars indicate SEMs"
+  )
+
+relapse_feature_plot
+
+ggsave(
+  filename = "relapse_feature_plot.pdf", 
+  plot = relapse_feature_plot, 
+  path = file.path("~", "Desktop"), 
+  width = 12, 
+  height = 8
+)
+
+
+
+
+```
+
+```{r}
+relapse_feature_plot_2 <- 
+  full_data %>% 
+  mutate(across(any_of(coefficient_names_boot), scale, center = FALSE)) %>% 
+  group_by(patient) %>% 
+  filter(n() > 1) %>% 
+  pivot_longer(
+    cols = any_of(coefficient_names_boot), 
+    names_to = "feature", 
+    values_to = "value"
+  ) %>% 
+  ggplot(aes(x = condition, y = value, fill = patient)) + 
+  geom_line(aes(group = patient), alpha = 0.7) + 
+  geom_point(shape = 21, size = 3) + 
+  facet_wrap(facets = vars(feature), nrow = 2) + 
+  theme_bw() + 
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank()) + 
+  labs(
+    y = "Feature Value (scaled to SD=1)", 
+    x = NULL, 
+    fill = NULL 
+  )
+
+relapse_feature_plot_2
+
+ggsave(
+  filename = "relapse_feature_plot_2.pdf", 
+  plot = relapse_feature_plot_2, 
+  path = file.path("~", "Desktop"), 
+  width = 12, 
+  height = 8
+)
+
+```
+
+# Survival modeling from scratch
+
+Regularized cox modeling is not yet supported by the `tidymodels` framework, which means that I have to use `glmnet` from scratch to feature select while fitting the survival model itself. To do so, I used [this tutorial]("https://cran.r-project.org/web/packages/glmnet/vignettes/Coxnet.pdf") to help me out. 
+
+## What is Cox modeling?
+
+Insert section about the mathematical theory behind Cox regression.
+
+```{r}
+
 ```
 
 

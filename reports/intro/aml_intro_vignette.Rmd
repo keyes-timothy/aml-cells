@@ -17,26 +17,28 @@ In this vignette, we read in and preprocess AML data from .fcs files. We also pr
 
 ```{r libraries-and-params, message=FALSE, warning=FALSE}
 # Libraries
-library(flowCore)
-library(tidyverse)
-library(readxl)
-library(ggridges)
-library(rlang)
-library(ggthemes)
-library(DataExplorer)
-library(ComplexHeatmap)
-library(foreach)
-library(parallel)
+libraries <- 
+  c(
+    'flowCore', 
+    'tidyverse',
+    'readxl',
+    'ggridges',
+    'rlang',
+    'ggthemes',
+    'DataExplorer',
+    'ComplexHeatmap',
+    'foreach',
+    'parallel', 
+    'tidytof'
+  )
 
-# Parameters
-source(here::here("scripts", "setup", "aml_utils.R")) #may need to change on scg machines
+# call libraries
+source(here::here("scripts", "setup", "aml_utils.R"))
+call_libraries(libraries)
+
+# parameters
 set_global_variables(locale = "galaxia")
-
-tidyTOF_directory <- file.path("~", "GitHub", "tidyTOF")
 md_path <- here::here("data-raw", "AML_metadata.xlsx")
-
-# Sourcing tidyTOF functions
-source_tidyTOF(tidyTOF_directory)
 
 # set up aml marker and patient information
 marker_setup()
@@ -60,7 +62,7 @@ md <-
   janitor::clean_names(case = "snake")
 
 md %>% 
-  write_rds(path = here::here("data", "md.rds"))
+  write_rds(file = here::here("data", "md.rds"))
 ```
 
 
