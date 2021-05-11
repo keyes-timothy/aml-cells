@@ -234,13 +234,20 @@ For this, we will use the same 4 clustering strategies as above. First we start 
 ```{r}
 mean_feature_matrices <-
   tibble(
-    features_mahalanobis = 
+    features_ddpr_mahalanobis = 
       list(
         aml_extract_lineage_features(
           cluster_col = mahalanobis_cluster, 
           central_tendency = mean
         )
       ),
+    features_ddpr_cos = 
+      list(
+        aml_extract_lineage_features(
+          cluster_col = cosine_cluster, 
+          central_tendency = mean
+        )
+      ), 
     features_flowsom_surface = 
       list(
         aml_extract_lineage_features(
@@ -280,11 +287,18 @@ mean_feature_matrices
 ```{r}
 abundance_feature_matrices <-
   tibble(
-    features_mahalanobis = 
+    features_ddpr_mahalanobis = 
       list(
         extract_feature_proportion(
           tof_tibble = group_by(aml_data, patient, condition),
           cluster_col = mahalanobis_cluster
+        )
+      ),
+    features_ddpr_cos = 
+      list(
+        extract_feature_proportion(
+          tof_tibble = group_by(aml_data, patient, condition), 
+          cluster_col = cosine_cluster
         )
       ),
     features_flowsom_surface = 

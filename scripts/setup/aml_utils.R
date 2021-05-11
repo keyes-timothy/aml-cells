@@ -737,3 +737,332 @@ aml_create_model <-
     }
     
   }
+
+
+
+#flowSOM_cluster.R 
+
+# Description: Performs FlowSOM clustering on an input dataset with a specified number k of nearest 
+#              neighbors in the graph construction step. 
+#
+# Inputs:
+#    expression_matrix = an [m x n] matrix of m cells and n measured signals on which the algorithm will operate. 
+#    cluster_markers = character vector of the column (marker) names to use in the clustering.
+#    num_cells_mc = number of cells from each cluster to use for monte carlo sampling and cluster metric calculations
+#    make_patient_heatmap = boolean value indicating if a heatmap representing the percentage of each patient that falls in 
+#                           each cluster should be plottted. Requires that expression_matrix has a column with the name 
+#                           "patient." Default = FALSE.
+#
+# Returns: A flowCluster object with the following components... 
+#     num_clusters = an integer indicating the number of clusters that were identified by the Phenograph algorithm
+#     my_clusters: an integer vector of length m indicating the cluster assignment for each cell in expression_matrix
+#     my_silhouettes: a double vector of length m indicating the silhouette value for each phenograph cluster
+#     patient_heatmap: a ggplot object encoding a heatmap of the distribution of each patient's cells across 
+#                      each of the phenograph clusters identified in the algorithmic step. If FALSE, will not return a heatmap. 
+#     heatmap_matrix: the matrix that was used to construct the patient_heatmap.
+#
+#
+# Optimizations: 
+#
+#     Currently, expression_matrix must contain a column called "patient" - change this to any categorical variable (or multiple).
+
+
+flowSOM_cluster <- 
+  function(
+    expression_matrix = NULL, 
+    cluster_markers = colnames(expression_matrix)
+  ){
+    
+    my_FSO <- 
+      list(
+        data = data.matrix(expression_matrix), 
+        compensate = FALSE, 
+        spillover = NULL, 
+        transform = FALSE, 
+        scale = NULL, 
+        prettyColnames = colnames(expression_matrix)
+      )
+    
+    my_SOM <- 
+      BuildSOM(
+        fsom = my_FSO, 
+        colsToUse = which(colnames(expression_matrix) %in% cluster_markers)
+      )
+    
+    my_clusters <- my_SOM$map$mapping[,1] #flowSOM clustering must go here
+    
+    my_MST <- BuildMST(my_SOM, tSNE = FALSE)
+    
+    flowSOM_metaclusters <- 
+      MetaClustering(
+        data = my_MST$map$codes, 
+        method = "metaClustering_consensus", 
+        max = 50
+      )
+    
+    flowSOM_metaclusters_cells <- flowSOM_metaclusters[my_MST$map$mapping[,1]]
+    
+    
+    
+    
+    #deal with cells not assigned to a cluster - take out?
+    if(length(my_clusters) != nrow(expression_matrix)) { 
+      cell_string <- as.character(as.numeric(1:nrow(expression_matrix)))
+      bad_cells <- which(!(cell_string %in% names(my_clusters)))
+      bad_cell_clusters <- rep(NA, length(bad.cells)) 
+      names(bad_cell_clusters) <- as.character(bad.cells)
+      my_clusters <- c(my_clusters, bad_cell_clusters)
+      my_clusters <- my_clusters[order(as.numeric(names(my_clusters)))] 
+    }
+    
+    my_clusters <- 
+      my_clusters %>% 
+      as.numeric()
+    
+    #save num_clusters
+    num_clusters <- length(unique(my_clusters))
+    
+    #return final list 
+    flowCluster_result <- 
+      list(
+        num_clusters = num_clusters, 
+        my_clusters = my_clusters, 
+        my_metaclusters = flowSOM_metaclusters_cells
+      )
+    
+    flowCluster_result
+  } 
+
+#
+#
+#
+subset_sc_aml <- function(cluster_col, my_cluster, my_patient, my_condition, my_stimulation){ 
+  aml_data %>% 
+    filter(
+      {{cluster_col}} == my_cluster,
+      patient == my_patient,
+      condition == my_condition, 
+      stimulation %in% c("Basal", my_stimulation)
+    )
+}
+
+#
+
+# Description: 
+#
+# Inputs:
+#    
+#
+# Returns: 
+#
+#
+# Optimizations: 
+#
+explore_signaling_residuals <- 
+  function(my_cluster_type, my_feature, my_outcome) {
+  
+  # obtain all data corresponding to the cluster_type you're interested in
+  modeling_data <- 
+    cancer_modeling_omnibus %>% 
+    filter(cluster_type == my_cluster_type) %>% 
+    pull(features) %>% 
+    pluck(1) %>% 
+    group_by(feature) %>% 
+    nest()
+  
+  cluster_col <- 
+    cancer_modeling_omnibus %>% 
+    filter(cluster_type == my_cluster_type) %>% 
+    pull(cluster_cols) %>% 
+    pluck(1)
+  
+  # filter out only data corresponding to the feature and outcome of interest
+  my_data <- 
+    modeling_data %>% 
+    filter(feature == my_feature) %>% 
+    pull(data) %>% 
+    pluck(1) %>% 
+    select(patient, condition, ddpr, any_of(my_outcome)) %>% 
+    drop_na()
+  
+  # model the ddpr features as a function of the my_outcome features
+  linear_model <- 
+    linear_reg() %>% 
+    set_engine("lm")
+  
+  linear_recipe <- 
+    recipe(formula = ddpr ~ ., x = my_data) %>% 
+    step_rm(patient, condition) %>% 
+    #step_scale(everything(), skip = TRUE) %>% 
+    step_mutate_at(
+      any_of(c("ddpr", my_outcome)), 
+      fn = ~ .x / max(.x, na.rm = TRUE), 
+      skip = TRUE
+    ) %>% 
+    step_naomit(everything(), skip = TRUE)
+  
+  linear_workflow <- 
+    workflow() %>% 
+    add_recipe(linear_recipe) %>% 
+    add_model(linear_model)
+  
+  linear_fit <- 
+    linear_workflow %>% 
+    fit(data = my_data)
+  
+  my_residuals <- 
+    linear_fit %>% 
+    extract_model() %>% 
+    pluck("residuals")
+  
+  my_predictions <- 
+    linear_fit %>% 
+    predict(new_data = my_data) %>% 
+    pull(.pred)
+  
+  c(intercept, slope) %<-% 
+    (
+      linear_fit %>% 
+        extract_model() %>% 
+        pluck("coefficients") %>% 
+        as.numeric() %>% 
+        as.list()
+    )
+  
+  modeling_result <- 
+    linear_recipe %>%
+    prep() %>% 
+    juice() %>% 
+    mutate(
+      residuals = my_residuals, 
+      predictions = my_predictions
+    ) %>% 
+    bind_cols(select(my_data, patient, condition))
+  
+  # make residual histogram
+  residual_histogram <- 
+    modeling_result %>% 
+    ggplot(aes(x = residuals)) + 
+    geom_histogram() + 
+    labs(subtitle = my_feature)
+  
+  # make regression plot 
+  regression_plot <- 
+    modeling_result %>% 
+    ggplot(aes_string(y = "ddpr", x = my_outcome)) + 
+    geom_point() + 
+    geom_abline(intercept = intercept, slope = slope, linetype = "dashed")
+  
+  # find all the variables we need to filter the single-cell data
+  c(my_stim, my_marker, my_cluster) %<-% 
+    str_split(my_feature, pattern = "_", simplify = TRUE)
+  
+  aml_subset <- 
+    modeling_result %>% 
+    mutate(
+      data = 
+        map2(
+          .x = patient,
+          .y = condition,
+          .f = ~ 
+            subset_sc_aml(
+              cluster_col = {{cluster_col}}, 
+              my_cluster = my_cluster, 
+              my_patient = .x, 
+              my_condition = .y, 
+              my_stimulation = my_stim
+            ) %>% 
+            select(patient, condition, stimulation, {{cluster_col}}, any_of(my_marker))
+        ), 
+      num_cells = map_int(
+        .x = data, 
+        .f = ~ 
+          count(.x, stimulation) %>% 
+          pull(n) %>% 
+          min()
+      )
+    )
+  
+  correlation <- 
+    aml_subset %>% 
+    summarize(correlation = cor(residuals, num_cells)) %>% 
+    pull(correlation) %>% 
+    round(3)
+  
+  # make a scatterplot of number of cells vs. the residuals
+  correlation_scatterplot <- 
+    aml_subset %>%
+    ggplot(aes(x = num_cells, y = residuals)) + 
+    geom_point() + 
+    labs(caption = str_c("Correlation = ", correlation))
+    
+  correlation_scatterplot <- 
+    correlation_scatterplot %>% 
+    ggMarginal(type = "histogram")
+  
+  # make histograms comparing the highest, lowest,and median residual distributions 
+  # with one another
+  my_length <- length(aml_subset$residuals)
+  
+  max_residual <- max(abs(aml_subset$residuals))
+  min_residual <- min(abs(aml_subset$residuals))
+  mid_residual <- 
+    abs(aml_subset$residuals[rank(abs(aml_subset$residuals)) == ceiling(my_length / 2)])
+  
+  patient_order <- 
+    aml_subset %>% 
+    filter(abs(residuals) %in% c(max_residual, min_residual, mid_residual)) %>% 
+    arrange(-abs(residuals)) %>% 
+    pull(patient)
+  
+  annotation_tibble <- 
+    aml_subset %>% 
+    filter(abs(residuals) %in% c(max_residual, min_residual, mid_residual)) %>% 
+    select(data) %>% 
+    unnest(cols = data) %>% 
+    mutate(patient = factor(patient, levels = patient_order)) %>% 
+    group_by(patient, condition, stimulation) %>% 
+    summarize(
+      num_cells = n(), 
+      across(any_of(my_marker), ~ quantile(.x, 0.85))
+    ) %>% 
+    rename_with(.fn = ~ return("channel"), .cols = any_of(my_marker))
+
+
+  density_plot <- 
+    aml_subset %>%
+    filter(abs(residuals) %in% c(max_residual, min_residual, mid_residual)) %>% 
+    mutate(patient = factor(patient, levels = patient_order)) %>% 
+    unnest() %>%
+    ggplot(aes_string(x = my_marker, fill = "stimulation")) + 
+    geom_vline(xintercept = asinh(10/5), linetype = "dashed", color = "black") + 
+    geom_density(aes(y = ..scaled..)) + 
+    geom_text(
+      aes(x = asinh(10/5), y = 1, label = str_c(num_cells, " cells")), 
+      data = annotation_tibble, 
+      hjust = 0, 
+      nudge_x = 0.1
+    ) + 
+    facet_grid(rows = vars(stimulation), cols = vars(patient), scales = "free") + 
+    labs(
+      subtitle = str_c(my_marker, " in this cluster: ", my_cluster),
+      y = "Scaled density",
+      caption = "From right to left: Maximum residual, median residual, minimum residual"
+    )
+  
+  final_result <- 
+    tibble(
+      cluster_type = my_cluster_type, 
+      feature = my_feature,
+      modeling_result = list(modeling_result),
+      regression_plot = list(regression_plot),
+      residual_histogram = list(residual_histogram), 
+      correlation_scatterplot = list(correlation_scatterplot), 
+      density_plot = list(density_plot)
+    )
+  
+  return(final_result)
+  
+}
+
+

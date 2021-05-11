@@ -24,9 +24,9 @@
 #
 #     Currently, expression_matrix must contain a column called "patient" - change this to any categorical variable (or multiple).
 
-library(FlowSOM)
-source(file.path(CODE.DIRECTORY, 'helpers', 'dunn_mc.R'))
-source(file.path(CODE.DIRECTORY, 'helpers', 'silhouette_mc.R'))
+#library(FlowSOM)
+source(file.path(CODE_DIRECTORY, 'helpers', 'dunn_mc.R'))
+source(file.path(CODE_DIRECTORY, 'helpers', 'silhouette_mc.R'))
 
 flowSOM_cluster <- function(expression_matrix = NULL, 
                                cluster_markers = colnames(expression_matrix), 
