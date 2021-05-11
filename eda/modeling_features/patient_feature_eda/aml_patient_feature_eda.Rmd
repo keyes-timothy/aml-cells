@@ -1,0 +1,100 @@
+---
+title: "AML Patient-Level EDA"
+author: tkeyes
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+libraries <- 
+  c(
+    "tidyverse", 
+    "readxl", 
+    "ggridges", 
+    "rlang", 
+    "foreach", 
+    "ggrepel", 
+    "FlowSOM",
+    "tidytof"
+  )
+
+source(here::here("scripts", "setup", "aml_utils.R"))
+call_libraries(libraries)
+
+
+# Parameters
+set_global_variables(locale = "galaxia")
+md_path <- here::here("data-raw", "AML_metadata.xlsx")
+patient_path <- 
+  here::here("data", "patient-level_feature_matrices", "from_sherlock")
+
+CLUSTER_OUTPUT <- here::here("data", "cancer_data_clustered.rds")
+
+# set up aml marker and patient information
+marker_setup()
+patient_setup()
+
+```
+
+
+# Executive Summary 
+
+In this document, we do some exploratory data analysis and visualization of the features derived from our feature extraction procedure [here](https://github.com/keyes-timothy/aml-cells/blob/master/reports/feature_extraction/aml_feature_extraction_vignette.md). 
+
+This is somewhat of a preamble to the modeling process featured [here](https://github.com/keyes-timothy/aml-cells/blob/master/reports/predictive_modeling/aml_predictive_modeling_vignette.md).
+
+# Read in data
+
+```{r}
+file_names <- 
+  patient_path %>% 
+  list.files() %>% 
+  str_replace(pattern = ".rds", "")
+
+file_paths <- 
+  patient_path %>% 
+  list.files(full.names = TRUE)
+
+file_paths
+
+walk2(
+  .x = file_names, 
+  .y = file_paths, 
+  .f = ~assign(x = .x, value = read_rds(.y), envir = global_env())
+)
+
+```
+
+
+```{r}
+
+ddpr_feature_matrices
+
+emd_feature_matrices
+
+js_feature_matrices
+
+mean_feature_matrices
+
+```
+
+
+
+
+
+```{r}
+
+mean_feature_matrices
+
+mean_feature_matrices_local
+
+
+```
+

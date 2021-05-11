@@ -1,0 +1,1554 @@
+---
+title: "AML Feature Extraction Vignette"
+author: tkeyes
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+libraries <- 
+  c(
+    "tidyverse", 
+    "readxl", 
+    "rlang", 
+    "tidytof", 
+    "corrr", 
+    "GGally", 
+    "tidymodels", 
+    "zeallot",
+    "ggExtra"
+  )
+
+source(here::here("scripts", "setup", "aml_utils.R"))
+call_libraries(libraries)
+source(here::here("scripts", "feature_extraction", "feature_extraction_utils.R"))
+
+
+# Parameters
+set_global_variables(locale = "galaxia")
+md_path <- here::here("data", "md.rds")
+
+CLUSTER_OUTPUT <- here::here("data", "cancer_data_clustered.rds")
+
+# set up aml marker and patient information
+marker_setup()
+patient_setup()
+
+# Misc globals for running different parts of this vignette
+ddpr_path <- 
+  here::here("data", "patient-level_feature_matrices", "ddpr_feature_matrices.rds")
+js_path <- 
+  here::here("data", "patient-level_feature_matrices", "js_feature_matrices.rds")
+mean_path <- 
+  here::here("data", "patient-level_feature_matrices", "mean_feature_matrices.rds")
+emd_path <- 
+  here::here("data", "patient-level_feature_matrices", "from_sherlock", "emd_feature_matrices.rds")
+
+# path for aml single-cell data
+
+aml_path <- here::here("data", "aml_data_clustered.rds")
+
+```
+
+# Read in data
+
+First we read in the features extracted using any of the 4 feature extraction methods: 
+
+* ddpr
+* jensen-shannon 
+* earth-mover's distance
+* taking simple means
+
+```{r}
+ddpr_features <- 
+  ddpr_path %>% 
+  read_rds()
+
+js_features <- 
+  js_path %>% 
+  read_rds()
+
+mean_features <- 
+  mean_path %>% 
+  read_rds()
+
+emd_features <- 
+  emd_path %>% 
+  read_rds()
+```
+
+```{r}
+# read in metadata
+metadata <- 
+  md_path %>% 
+  read_rds() %>%   
+  transmute(
+    patient, 
+    event_free_survival_time = event_free_survival_time_in_days,
+    first_event,
+    aml0531_risk = 
+      case_when(
+        inv_16 == "Yes" | t_8_21 == "Yes" ~ "Low", 
+        any(
+          monosomy_5 == "Yes", 
+          monosomy_7 == "Yes", 
+          del5q == "Yes", 
+          !is.na(flt3_itd_allelic_ratio)
+        )                                 ~ "High", 
+        TRUE                              ~ "Intermediate"
+      )
+  )
+
+metadata
+```
+
+```{r}
+# read in the single-cell data 
+aml_data <- 
+  aml_path %>% 
+  read_rds()
+```
+
+
+
+# Pre-processing 
+
+```{r}
+# fixing the formatting of the js_features data structure
+temp <- 
+  js_features %>% 
+  as.list()
+
+js_features <- 
+  tibble(
+    cluster_type = temp$cluster_type, 
+    features = temp$features
+  )
+
+js_features
+
+```
+
+
+# Compare data structures 
+
+```{r}
+ddpr_features
+
+js_features
+
+mean_features
+
+emd_features
+```
+
+We can see that `ddpr_features` needs to change some of the values in the `cluster_type` column to match the others, so we make that change in the next code block. For good measure, we also convert the `threshold` column back to counts (instead of asinh-transformed counts). 
+
+```{r}
+ddpr_features <- 
+  ddpr_features %>% 
+  mutate(
+    cluster_type = 
+      fct_recode(
+        cluster_type, 
+        ddpr_mahalanobis = "mahalanobis", 
+        ddpr_cos = "cos"
+      ), 
+    threshold = round(sinh(threshold))
+  )
+
+ddpr_features
+```
+`mean_features` also needs to change the name of one of its columns
+
+```{r}
+mean_features <- 
+  mean_features %>% 
+  rename(features = final_features)
+
+mean_features
+```
+
+
+
+# Useful functions
+
+`extract_signaling_markers` is a function that, given one of our omnibus feature extraction objects above, will extract only the markers corresponding to signaling features from each one. It also puts every feature value into long form in the output tibble. This will be useful for making more streamlined data structures later on in the analysis. 
+
+```{r, warning = FALSE, method = FALSE}
+extract_signaling_markers <- function(feature_matrices) { 
+  
+  if ("threshold" %in% colnames(feature_matrices)) { 
+  feature_signaling <- 
+    feature_matrices %>% 
+    filter(threshold == 10) %>% 
+    select(-threshold) 
+
+  } else {
+    feature_signaling <- feature_matrices
+  }
+  
+  feature_signaling <- 
+    feature_signaling %>% 
+    mutate(
+      features = 
+        map(
+          .x = features,
+          .f = ~ 
+            select(
+              .x, 
+              patient, 
+              condition, 
+              contains(paste(SIGNALING_MARKERS, sep = "|"))
+            ) %>%
+            pivot_longer(
+              cols = c(-patient, -condition),
+              names_to = "feature",
+              values_to = "values"
+            ) %>%
+            filter(str_detect(string = feature, pattern = "_")) %>% 
+            separate(col = feature, into = c("stimulation", "marker", "cell_type"))
+        )
+    ) %>% 
+    unnest(cols = features)
+  
+  feature_signaling
+  
+}
+```
+
+Some additional functions that help us make raincloud plots later. 
+
+```{r}
+"%||%" <- 
+  function(a, b) {
+    if (!is.null(a)) a else b
+  }
+
+geom_flat_violin <- 
+  function(
+    mapping = NULL, 
+    data = NULL, 
+    stat = "ydensity",
+    position = "dodge", 
+    trim = TRUE, 
+    scale = "area",
+    show.legend = NA, 
+    inherit.aes = TRUE, 
+    ...
+  ) {
+    layer(
+      data = data,
+      mapping = mapping,
+      stat = stat,
+      geom = GeomFlatViolin,
+      position = position,
+      show.legend = show.legend,
+      inherit.aes = inherit.aes,
+      params = list(
+        trim = trim,
+        scale = scale,
+        ...
+      )
+    )
+  }
+
+GeomFlatViolin <-
+  ggproto("GeomFlatViolin", Geom,
+          setup_data = function(data, params) {
+            data$width <- data$width %||%
+              params$width %||% (resolution(data$x, FALSE) * 0.9)
+            
+            # ymin, ymax, xmin, and xmax define the bounding rectangle for each group
+            data %>%
+              group_by(group) %>%
+              mutate(
+                ymin = min(y),
+                ymax = max(y),
+                xmin = x,
+                xmax = x + width / 2
+              )
+          },
+          
+          draw_group = function(data, panel_scales, coord) {
+            # Find the points for the line to go all the way around
+            data <- transform(data,
+                              xminv = x,
+                              xmaxv = x + violinwidth * (xmax - x)
+            )
+            
+            # Make sure it's sorted properly to draw the outline
+            newdata <- rbind(
+              plyr::arrange(transform(data, x = xminv), y),
+              plyr::arrange(transform(data, x = xmaxv), -y)
+            )
+            
+            # Close the polygon: set first and last point the same
+            # Needed for coord_polar and such
+            newdata <- rbind(newdata, newdata[1, ])
+            
+            ggplot2:::ggname("geom_flat_violin", GeomPolygon$draw_panel(newdata, panel_scales, coord))
+          },
+          
+          draw_key = draw_key_polygon,
+          
+          default_aes = aes(
+            weight = 1, colour = "grey20", fill = "white", size = 0.5,
+            alpha = NA, linetype = "solid"
+          ),
+          
+          required_aes = c("x", "y")
+  )
+```
+
+
+
+# Creating a useful data structure 
+
+This data structure combines the data we've read in above into a single tibble with 4 columns: 
+
+* cluster_type (encodes the clustering method used to define the clusters for that row)
+* ddpr_features (contains a tibble of ddpr-extracted features for each cluster method in cluster_type)
+* emd_features (contains a tibble of ddpr-extracted features for each cluster method in cluster_type)
+* js_features (contains a tibble of ddpr-extracted features for each cluster method in cluster_type)
+
+```{r}
+all_signaling_features <- 
+  map2(
+    .x = list(ddpr_features, emd_features, js_features), 
+    .y = c("ddpr_features", "emd_features", "js_features"),
+    .f = 
+      ~ extract_signaling_markers(.x) %>% 
+      nest(!!.y := -cluster_type)
+  ) %>% 
+  reduce(.f = left_join)
+
+all_signaling_features
+  
+```
+
+In our original ddpr feature extraction, we calculated the proportion of cells above some count threshold for each stimulation condition in each cell subpopulation for each marker. In this case, we are interested not in the raw values themselves but in the difference between each of the stimulation conditions and the basal condition. We calculate this below to finalize this data structure: 
+
+First, a function to do the heavy lifting
+
+```{r}
+find_ddpr_difference <- function(ddpr_tibble) { 
+  
+  # find the basal values for each patient, condition, cluster, and marker
+  basal_features <- 
+    ddpr_tibble %>% 
+    filter(stimulation == "Basal") %>% 
+    rename(basal_values = values) %>% 
+    select(-stimulation)
+  
+  result <- 
+    ddpr_tibble %>% 
+    filter(stimulation != "Basal") %>% 
+    left_join(basal_features) %>% 
+    mutate(values = abs(values - basal_values)) %>% 
+    select(-basal_values)
+  
+  return(result)
+  
+}
+
+```
+
+Apply the function to the ddpr_features column of our data structure
+
+```{r, message = FALSE}
+all_signaling_features <- 
+  all_signaling_features %>% 
+  mutate(ddpr_features = map(ddpr_features, find_ddpr_difference)) 
+
+all_signaling_features
+```
+
+
+# EDA
+
+## DDPR signaling features as a function of threshold
+
+First, we look at the signaling features extracted using the DDPR approach to signaling markers (number of cells above a static count threshold). We expect that as the threshold is raised, the feature will have lower values across the board. **Looking into this is important because in the original DDPR paper, the threshold of 10 count seemed a bit arbitrary, so we should check that there isn't another threshold that makes more sense on the AML dataset.**
+
+We can assess this using some simple plots that are drawn with the following function. Each plot will analyze the signaling features derived using the threshold method under one (of our 5) clustering approaches.
+
+```{r, warning = FALSE, message = FALSE}
+plot_ddpr_thresh <- function(my_clusters, my_channel) {
+  plot_features <- 
+    ddpr_features %>% 
+    filter(cluster_type == my_clusters) %>% 
+    unnest(cols = features) %>% 
+    pivot_longer(
+      cols = contains("@"), 
+      names_to = "feature", 
+      values_to = "value"
+    ) %>% 
+    separate(col = feature, into = c("feature", "cell_type"), sep = "@") %>% 
+    separate(col = feature, into = c("stimulation", "channel"), sep = "_") %>% 
+    filter(str_detect(channel, pattern = paste(SIGNALING_MARKERS, sep = "|"))) %>% 
+    drop_na(channel) %>% 
+    filter(channel == my_channel) %>%
+    group_by(channel, cell_type, threshold, stimulation) %>% 
+    summarize(across(where(is.numeric), mean, na.rm = TRUE)) %>% 
+    ungroup()
+  
+  plot_order <- 
+    plot_features %>% 
+    filter(threshold == 5) %>% 
+    group_by(cell_type) %>% 
+    summarize(value = max(value)) %>% 
+    arrange(value) %>% 
+    pull(cell_type)
+  
+  plot_features <- 
+    plot_features %>% 
+    mutate(cell_type = factor(cell_type, levels = plot_order))
+    
+  
+  plot_features %>% 
+    ggplot(aes(x = value, y = cell_type, fill = stimulation)) + 
+    geom_point(shape = 21, color = "black", size = 1.5, alpha = 0.7) + 
+    facet_grid(rows = vars(round(threshold, 1))) + 
+    labs(
+      subtitle = my_channel, 
+      caption = str_wrap("Each point represents the average across all patients for a given cluster and stimulation condition")
+    )
+}
+```
+
+First we look at the developmental classifier clustering using mahalanobis_distance.
+
+```{r, warning = FALSE, message = FALSE}
+my_plots <- 
+  tibble(
+    marker = SIGNALING_MARKERS, 
+    plots =
+      map(
+        .x = SIGNALING_MARKERS, 
+        .f = ~ plot_ddpr_thresh(my_clusters = "ddpr_mahalanobis", my_channel = .x)
+      )
+  )
+
+my_plots <- 
+  my_plots %>% 
+  mutate(
+    file_names = 
+      here::here(
+        "eda", "modeling_features", "patient_feature_eda", "threshold_figures/"
+      ) %>% 
+      str_c(marker, "_mah_threshold_plot.pdf")
+  )
+    
+walk(my_plots$plots, print)
+
+walk2(
+  .x = my_plots$plots, 
+  .y = my_plots$file_names,
+  ~ ggsave(
+    filename = .y, 
+    plot = .x,
+    device = "pdf", 
+    width = 6, 
+    height = 6.5
+  )
+)
+```
+
+Next, we look at flowSOM clustering using surface markers.
+
+```{r, warning = FALSE, message = FALSE}
+my_plots <- 
+  tibble(
+    marker = SIGNALING_MARKERS, 
+    plots =
+      map(
+        .x = SIGNALING_MARKERS, 
+        .f = ~ 
+          plot_ddpr_thresh(my_clusters = "flowsom_surface", my_channel = .x) + 
+          theme(axis.text.y = element_blank())
+      )
+  )
+    
+my_plots <- 
+  my_plots %>% 
+  mutate(
+    file_names = 
+      here::here(
+        "eda", "modeling_features", "patient_feature_eda", "threshold_figures/"
+      ) %>% 
+      str_c(marker, "_flowsom_surface_threshold_plot.pdf")
+  )
+
+my_plots
+
+walk(my_plots$plots, print)
+
+walk2(
+  .x = my_plots$plots, 
+  .y = my_plots$file_names,
+  ~ ggsave(
+    filename = .y, 
+    plot = .x,
+    device = "pdf", 
+    width = 6, 
+    height = 6.5
+  )
+)
+```
+
+Next, we look at developmental classification into flowSOM-derived healthy clusters using mahalanobis-distance. 
+
+```{r, warning = FALSE, message = FALSE}
+my_plots <- 
+  tibble(
+    marker = SIGNALING_MARKERS, 
+    plots = 
+      map(
+        .x = marker, 
+        .f = ~ 
+          plot_ddpr_thresh(my_clusters = "flowsom_mah", my_channel = .x) + 
+          theme(axis.text.y = element_blank())
+      )
+  )
+
+my_plots <- 
+  my_plots %>% 
+  mutate(
+    file_names = 
+      here::here(
+        "eda", "modeling_features", "patient_feature_eda", "threshold_figures/"
+      ) %>% 
+      str_c(marker, "_flowsom_mah_threshold_plot.pdf")
+  )
+
+walk(my_plots$plots, print)
+
+walk2(
+  .x = my_plots$plots, 
+  .y = my_plots$file_names,
+  ~ ggsave(
+    filename = .y, 
+    plot = .x,
+    device = "pdf", 
+    width = 6, 
+    height = 6.5
+  )
+)
+
+```
+
+From all of these plots, we can see (as a sanity check) that, in general, the values for these features decrease as the threshold used for feature extraction goes up. Another good sanity check is that, in the stimulation conditions, we generally see higher responses on our signaling markers than in the basal condition (plotted above in red).
+
+However, another interesting finding is that the flowSOM clustering seemed to group cells into clusters that had some signal-responsive cells in each stimulation condition, whereas the based-on-healthy clustering methods tended to group cells into clusters such that cell types were more uniform in how they responded to stimulations (within a given stimulation condition, cell types tended to respond about the same on average - according to the ddpr thresholding procedure.)
+
+These kinds of results make me think about what the statistical properties are of the features we've derived. What is our model of how these features should differ between patients? What distributions would we expect in each feature (i.e. the proportion of cells over 10 counts for a given marker in a given cluster) across patients?
+
+
+
+## Do features extracted using different methods correlate with one another?
+
+Another thing I want to explore in the patient-level features here is whether or not the features for a given cell type, stimulation condition, and marker obtained using our 3 extraction methods correlate with one another. (If they do, then it doesn't really matter which one we use in our patient-level model). 
+
+First, filter out all the healthy patients, who we're not interested in at the moment.
+
+```{r}
+cancer_signaling_features <- 
+  all_signaling_features %>% 
+  # filter to a single cluster type
+  #filter(cluster_type == "ddpr_mahalanobis") %>% 
+  pivot_longer(
+    cols = -cluster_type, 
+    names_to = "feature_type", 
+    values_to = "data"
+  ) %>% 
+  mutate(data = map(.x = data, .f = ~filter(.x, condition != "healthy"))) 
+
+cancer_signaling_features
+
+```
+
+## Overall correlation between extraction methods
+
+
+We can create a single, concatenated vector each feature extraction method using each of the features it calculates for each patient and find the pairwise correlations between each of the 3 extraction methods (ddpr, emd, and js). 
+
+```{r}
+my_cluster_type <- "ddpr_mahalanobis"
+
+correlations <- 
+  cancer_signaling_features %>% 
+  filter(cluster_type == my_cluster_type) %>% 
+  unnest(cols = data) %>% 
+  pivot_wider(
+    names_from = feature_type, 
+    values_from = values
+  ) %>% 
+  select(contains("_features")) %>% 
+  correlate() %>% 
+  shave() 
+
+correlations %>% 
+  fashion()
+```
+
+Overall, we can see that the ddpr-extracted features correlated quite well with the emd features and not-that-well with the js features. We can also see that the emd and js features correlate fairly well with one another (kind of intermediate between the other two correlations). 
+
+
+We can also express this visually by making a scatterplot matrix.
+
+```{r}
+scatterplot_matrix <- 
+  cancer_signaling_features %>% 
+  filter(cluster_type == my_cluster_type) %>% 
+  unnest(cols = data) %>% 
+  pivot_wider(
+    names_from = feature_type, 
+    values_from = values
+  ) %>% 
+  select(contains("_features")) %>%
+  drop_na() %>% 
+  ggpairs()
+
+scatterplot_matrix
+```
+
+
+Or if we take the log of the values, we can get distributions that are a bit more normal.
+
+```{r, warning = FALSE}
+scatterplot_matrix_log <- 
+  cancer_signaling_features %>% 
+  filter(cluster_type == my_cluster_type) %>% 
+  unnest(cols = data) %>% 
+  pivot_wider(
+    names_from = feature_type, 
+    values_from = values
+  ) %>% 
+  select(contains("_features")) %>% 
+  mutate(
+    across(everything(), log), 
+    across(everything(), ~ replace(.x, is.infinite(.x), NA_integer_))
+  ) %>% 
+  drop_na() %>% 
+  ggpairs()
+
+scatterplot_matrix_log
+```
+
+Overall, it seems that ddpr features correlated better with emd features than with js features, and that js features and emd features correlate fairly well with one another. 
+
+
+## Subgroup-specific correlations
+
+We can look for more specific effects by grouping the features based on their characteristics and looking for subgroup-specific correlations based on how they are grouped. 
+
+In general, I think the most important thing that these feature-extraction methods should do is capture the differences in signaling responses of each cluster in different stimulation conditions. To look for a correlation in how each feature method represents those differences, we can group the features from each method by signaling marker and by cell population and then find the correlations between methods across patients.
+
+Essentially, this model assumes that each patient is drawn randomly from some population of patients, and (accordingly) that each of their cell populations' responses to a stimulation condition are distributed along some "response distribution" that is unique to each marker. Thus, we would expect our different feature extraction methods to find values that correlate with one another across patients, but that these corelations might differ according to cell type and/or marker. 
+
+```{r, message = FALSE}
+# a helper function 
+# input: 
+# output: 
+find_subgroup_correlations <- 
+  function(cancer_signaling_features, my_cluster_type) { 
+    subgroup_correlations <- 
+      cancer_signaling_features %>% 
+      filter(cluster_type == my_cluster_type) %>% 
+      unnest(cols = data) %>% 
+      pivot_wider(
+        names_from = feature_type, 
+        values_from = values
+      ) %>% 
+      group_by(cell_type, marker) %>% 
+      nest() %>% 
+      mutate(
+        correlations = 
+          map(
+            .x = data, 
+            .f = ~ 
+              select(.x, contains("_features")) %>% 
+              correlate() %>% 
+              shave() %>% 
+              stretch() %>% 
+              drop_na() %>% 
+              mutate(
+                x = str_remove(x, "_features"), 
+                y = str_remove(y, "_features")
+              ) %>% 
+              unite(col = "correlation_groups", x, y) %>% 
+              pivot_wider(names_from = correlation_groups, values_from = r)
+          )
+      ) %>% 
+      unnest(cols = correlations) %>% 
+      mutate(
+        mean_correlation = 
+          pmap_dbl(
+            .l = list(x = ddpr_emd, y = ddpr_js, z = emd_js), 
+            .f = function(x, y, z) mean(c(x, y, z))
+          )
+      )
+    
+    return(subgroup_correlations)
+  }
+
+subgroup_correlations_ddpr_mah <- 
+  find_subgroup_correlations(
+    cancer_signaling_features = cancer_signaling_features, 
+    my_cluster_type = "ddpr_mahalanobis"
+  )
+
+subgroup_correlations_flowsom_surface <- 
+  find_subgroup_correlations(
+    cancer_signaling_features = cancer_signaling_features, 
+    my_cluster_type = "flowsom_surface"
+  )
+
+subgroup_correlations_flowsom_mah <- 
+  find_subgroup_correlations(
+    cancer_signaling_features = cancer_signaling_features, 
+    my_cluster_type = "flowsom_mah"
+  )
+
+```
+
+
+From these values, we can plot the average correlation between all 3 methods as a function of cluster and signaling marker. 
+
+```{r, fig.height=3.5}
+average_correlations <- 
+  subgroup_correlations_ddpr_mah %>% 
+  group_by(marker) %>% 
+  summarize(mean_correlation = mean(mean_correlation)) %>% 
+  mutate(marker = fct_reorder(marker, -mean_correlation))
+
+average_correlations
+
+average_correlation_plot <- 
+  subgroup_correlations_ddpr_mah %>% 
+  ungroup() %>% 
+  mutate(
+    cell_type = factor(cell_type, CLASSIFIER_POPULATIONS), 
+    marker = fct_reorder(marker, -mean_correlation, mean)
+  ) %>% 
+  ggplot(aes(x = cell_type, y = mean_correlation)) + 
+  geom_hline(
+    aes(yintercept = mean_correlation), 
+    data = average_correlations, 
+    linetype = "dashed", 
+    color = "red"
+  ) + 
+  geom_point() + 
+  facet_grid(rows = vars(marker)) + 
+  coord_flip() + 
+  labs(caption = "Clustering method: Developmental (mahalanobis)")
+
+average_correlation_plot
+```
+
+This plot is arranged such that the markers (from top to bottom) are faceted in descending order of their average correlation across all clusters. From this plot, we can see that not all signaling markers are represented in the same way across feature extraction processes - and that pAkt and pErk in particular have a lot of disagreement between different feature extractions methods.
+
+An alternative plot in which the clusters are not explicitly identified (and are simply represented as points) that illustrates the same point is here: 
+
+```{r}
+average_correlation_plot <- 
+  subgroup_correlations_ddpr_mah %>% 
+  ungroup() %>% 
+  mutate(
+    cell_type = as.factor(cell_type), 
+    marker = fct_reorder(marker, -mean_correlation)
+  ) %>% 
+  ggplot(aes(x = marker, y = mean_correlation, fill = marker)) + 
+  geom_flat_violin(position = position_nudge(x = 0.2, y = 0), adjust = 1) + 
+  geom_jitter(width = 0.1, size = 0.5) + 
+  geom_boxplot(
+    outlier.shape = NA,
+    alpha = 0.1, 
+    width = 0.1, 
+    color = "black", 
+    position = position_nudge(x = 0.2)
+  ) + 
+  ggthemes::scale_fill_tableau() + 
+  theme(legend.position = "none") + 
+  labs(caption = "Clustering method: Developmental (mahalanobis)")
+
+average_correlation_plot
+
+
+```
+
+We can also check if this same pattern holds when we use flowSOM clustering (not developmental clustering) for the feature extraction: 
+
+```{r}
+average_correlations <- 
+  subgroup_correlations_flowsom_surface %>% 
+  group_by(marker) %>% 
+  summarize(mean_correlation = mean(mean_correlation)) %>% 
+  mutate(marker = fct_reorder(marker, mean_correlation))
+
+average_correlation_plot <- 
+  subgroup_correlations_flowsom_surface %>% 
+  ungroup() %>% 
+  mutate(
+    cell_type = as.factor(cell_type), 
+    marker = fct_reorder(marker, -mean_correlation)
+  ) %>% 
+  ggplot(aes(x = cell_type, y = mean_correlation)) + 
+  geom_hline(aes(yintercept = mean_correlation), data = average_correlations, linetype = "dashed", color = "red") + 
+  geom_point() + 
+  facet_grid(rows = vars(marker)) + 
+  coord_flip() + 
+  theme(axis.text.y = element_blank()) + 
+  labs(caption = "Cluster type: flowSOM (surface)")
+
+average_correlation_plot
+```
+
+And we see a similar pattern where some of the markers have higher correlations across feature extraction methods than the others.
+
+And using a rain cloud plot: 
+
+```{r}
+average_correlation_plot <- 
+  subgroup_correlations_flowsom_surface %>% 
+  ungroup() %>% 
+  mutate(
+    cell_type = as.factor(cell_type), 
+    marker = fct_reorder(marker, -mean_correlation)
+  ) %>% 
+  ggplot(aes(x = marker, y = mean_correlation, fill = marker)) + 
+  geom_flat_violin(position = position_nudge(x = 0.2, y = 0), adjust = 1) + 
+  geom_jitter(width = 0.1, size = 0.5) + 
+  geom_boxplot(
+    outlier.shape = NA,
+    alpha = 0.1, 
+    width = 0.1, 
+    color = "black", 
+    position = position_nudge(x = 0.2)
+  ) + 
+  ggthemes::scale_fill_tableau() + 
+  theme(legend.position = "none") + 
+  labs(caption = "Cluster type: flowSOM (surface)")
+
+
+average_correlation_plot
+```
+
+
+Finally, we can see if the same pattern holds with yet another clustering strategy - mahalanobis classification into the healthy flowSOM clusters: 
+
+```{r}
+average_correlations <- 
+  subgroup_correlations_flowsom_mah %>% 
+  group_by(marker) %>% 
+  summarize(mean_correlation = mean(mean_correlation)) %>% 
+  mutate(marker = fct_reorder(marker, mean_correlation))
+
+average_correlation_plot <- 
+  subgroup_correlations_flowsom_mah %>% 
+  ungroup() %>% 
+  mutate(
+    cell_type = as.factor(cell_type), 
+    marker = fct_reorder(marker, -mean_correlation)
+  ) %>% 
+  ggplot(aes(x = cell_type, y = mean_correlation)) + 
+  geom_hline(aes(yintercept = mean_correlation), data = average_correlations, linetype = "dashed", color = "red") + 
+  geom_point() + 
+  facet_grid(rows = vars(marker)) + 
+  coord_flip() + 
+  theme(axis.text.y = element_blank()) + 
+  labs(caption = "Cluster type: flowSOM (mahalanobis)")
+
+average_correlation_plot
+```
+
+And once again we can see that the pattern holds. We can express it another way with a rain cloud plot.
+
+```{r}
+average_correlation_plot <- 
+  subgroup_correlations_flowsom_mah %>% 
+  ungroup() %>% 
+  mutate(
+    cell_type = as.factor(cell_type), 
+    marker = fct_reorder(marker, -mean_correlation)
+  ) %>% 
+  ggplot(aes(x = marker, y = mean_correlation, fill = marker)) + 
+  geom_flat_violin(position = position_nudge(x = 0.2, y = 0), adjust = 1) + 
+  geom_jitter(width = 0.1, size = 0.5) + 
+  geom_boxplot(
+    outlier.shape = NA,
+    alpha = 0.1, 
+    width = 0.1, 
+    color = "black", 
+    position = position_nudge(x = 0.2)
+  ) + 
+  ggthemes::scale_fill_tableau() + 
+  theme(legend.position = "none") + 
+  labs(caption = "Cluster type: FlowSOM (mahalanobis)")
+
+average_correlation_plot
+```
+
+And in general the same pattern seems to be present. So we're left with the question: what is driving this pattern?
+
+To try to get at this, there are a few approaches we can take.
+
+### Make more plots
+
+The first strategy we can use it to make more plots that get at the **pairwise** correlations (how much does the ddpr feature extraction correlate with the emd feature extraction, etc.).
+
+```{r}
+average_correlations <-
+  subgroup_correlations_ddpr_mah %>% 
+  group_by(marker) %>% 
+  summarize(ddpr_emd = mean(ddpr_emd)) %>% 
+  mutate(marker = fct_reorder(marker, -ddpr_emd))
+
+average_correlations
+
+ddpr_emd_correlation_plot <- 
+  subgroup_correlations_ddpr_mah %>% 
+  ungroup() %>% 
+  mutate(
+    cell_type = factor(cell_type, CLASSIFIER_POPULATIONS), 
+    marker = fct_reorder(marker, -ddpr_emd, mean)
+  ) %>% 
+  ggplot(aes(x = cell_type, y = ddpr_emd)) + 
+  geom_hline(
+    aes(yintercept = ddpr_emd), 
+    data = average_correlations, 
+    linetype = "dashed", 
+    color = "red"
+  ) + 
+  geom_point() + 
+  facet_grid(rows = vars(marker)) + 
+  coord_flip()
+
+ddpr_emd_correlation_plot
+```
+
+
+```{r}
+average_correlations <- 
+  subgroup_correlations_ddpr_mah %>% 
+  mutate(
+    cell_type = factor(cell_type, CLASSIFIER_POPULATIONS), 
+    marker = fct_reorder(marker, -ddpr_emd, mean)
+  ) %>% 
+  pivot_longer(
+    cols = c(ddpr_emd, ddpr_js, emd_js), 
+    names_to = "pair", 
+    values_to = "correlation"
+  ) %>% 
+  group_by(marker, pair) %>% 
+  summarize(mean_correlation = mean(correlation))
+
+ddpr_correlation_plot <- 
+  subgroup_correlations_ddpr_mah %>% 
+  ungroup() %>% 
+  mutate(
+    cell_type = factor(cell_type, CLASSIFIER_POPULATIONS), 
+    marker = fct_reorder(marker, -ddpr_emd, mean)
+  ) %>% 
+  pivot_longer(
+    cols = c(ddpr_emd, ddpr_js, emd_js), 
+    names_to = "pair", 
+    values_to = "correlation"
+  ) %>% 
+  ggplot(aes(y = cell_type, x = correlation)) + 
+  geom_vline(
+    aes(xintercept = mean_correlation),
+    data = average_correlations,
+    linetype = "dashed",
+    color = "red"
+  ) +
+  geom_point() + 
+  facet_grid(cols = vars(marker), rows = vars(pair))
+
+ddpr_correlation_plot
+```
+
+The facet grid breaks down the pairwise correlations between ddpr, emd, and js signaling feature extractions across signaling markers (columns) and feature extraction pairs (rows). This plot shows us a couple of things.
+
+* As above, we see that some markers have better correlations across feature extraction procedures across the board than others. For example, pSTAT5 has relatively high correlations between ddpr:emd, ddpr:js (with the exception of thrombocyte, monocyte, and HSC clusters), and emd:js (with the exception of the same clusters). 
+* In addition, we can see that within a given marker, ddpr and js features tend to correlate the least among all clusters, and ddpr and emd features tend to correlate the most. emd and js features tended to correlate about the same (if not a bit less) than ddpr and emd features.  
+* Across all markers and pairwise comparisons, the following clusters tend to correlate worse than the average correlation: HSC, Monocyte, and Thrombocyte. It'll be important to look into why that's the case. 
+
+
+Overall, these differences suggest that the differences in the distributions of certain signaling molecules might be better (or worse) represented by certain of the feature-extraction procedures compared to others (and they don't correlate that well with one another presumably because one of them does a better job than the other).
+
+
+
+### Use linear models to find points where the feature extraction methods find different information 
+
+First, we can make a data structure that contains all of our features in a way that makes them slightly easier to model (`cancer_modeling_omnibus`).
+
+```{r}
+cancer_modeling_omnibus <- 
+  cancer_signaling_features %>% 
+  nest(features = c(feature_type, data)) %>%
+  mutate(
+    features = map(.x = features, .f = ~unnest(.x, cols = data)), 
+    features = 
+      map(.x = features, .f = ~unite(.x, col = "feature", stimulation, marker, cell_type)), 
+    features = 
+      map(
+        .x = features, 
+        .f = ~
+          .x %>% 
+          pivot_wider(names_from = feature_type, values_from = values) %>% 
+          rename_with(.fn = str_remove, pattern = "_features", .cols = contains("_features"))
+      ), 
+    cluster_cols = 
+      syms(
+        c(
+          "mahalanobis_cluster", 
+          "cosine_cluster", 
+          "cluster_flowSOM_surface",
+          "cluster_flowSOM_mah", 
+          "cluster_flowSOM_cos")
+      )
+  )
+
+cancer_modeling_omnibus
+```
+
+
+From here, we can look at which patient/condition had the biggest difference between the ddpr-extracted features and the emd-extracted features and go back into the single-cell data to visualize what's going on. 
+
+
+Find the features with the lowest correlations and highest correlations and plot all of them
+
+```{r}
+stimulations <- 
+  unique(aml_data$stimulation) %>% 
+  purrr::discard(.p = ~.x == "Basal")
+
+max_features <- 
+  subgroup_correlations_ddpr_mah %>% 
+  group_by(marker) %>% 
+  slice_max(order_by = mean_correlation, n = 1) %>% 
+  unite(col = "feature", marker, cell_type) %>% 
+  pull(feature)
+
+min_features <- 
+  subgroup_correlations_ddpr_mah %>% 
+  group_by(marker) %>% 
+  slice_min(order_by = mean_correlation, n = 1) %>% 
+  unite(col = "feature", marker, cell_type) %>% 
+  pull(feature)
+
+max_features <- 
+  max_features %>% 
+  map(.x = ., .f = ~ str_c(stimulations, .x, sep = "_")) %>% 
+  unlist()
+
+min_features <- 
+  min_features %>% 
+  map(.x = ., .f = ~ str_c(stimulations, .x, sep = "_")) %>% 
+  unlist()
+
+max_features <- max_features[1:3]
+min_features <- min_features[1:3]
+
+max_features
+min_features
+```
+
+
+```{r}
+max_emd <- 
+  map(
+    .x = max_features, 
+    .f = ~
+      explore_signaling_residuals(
+        my_cluster_type = "ddpr_mahalanobis", 
+        #cluster_col = mahalanobis_cluster, 
+        my_feature = .x, 
+        my_outcome = "emd"
+      )
+  ) %>% 
+  reduce(.f = bind_rows)
+
+max_emd %>% 
+  pull(density_plot)
+
+max_emd %>% 
+  pull(correlation_scatterplot)
+
+min_emd <- 
+  map(
+    .x = min_features, 
+    .f = ~
+      explore_signaling_residuals(
+        my_cluster_type = "ddpr_mahalanobis", 
+        #cluster_col = mahalanobis_cluster, 
+        my_feature = .x, 
+        my_outcome = "emd"
+      )
+  ) %>% 
+  reduce(.f = bind_rows)
+```
+
+
+```{r}
+min_emd %>% 
+  pull(density_plot)
+
+min_emd %>% 
+  pull(correlation_scatterplot)
+```
+
+
+```{r}
+max_js <- 
+  map(
+    .x = max_features, 
+    .f = ~
+      explore_signaling_residuals(
+        my_cluster_type = "flowsom_mah", 
+        #cluster_col = mahalanobis_cluster, 
+        my_feature = .x, 
+        my_outcome = "js"
+      )
+  ) %>% 
+  reduce(.f = bind_rows)
+
+max_js %>% 
+  pull(density_plot)
+
+max_js %>% 
+  pull(correlation_scatterplot)
+```
+
+
+
+```{r, warning = FALSE}
+test_features <- 
+  str_c("GMCSF_pSTAT5_", CLASSIFIER_POPULATIONS)
+
+temp <- 
+  map(
+    .x = test_features, 
+    .f = ~
+      explore_signaling_residuals(
+        my_cluster_type = "ddpr_mahalanobis", 
+        #cluster_col = mahalanobis_cluster, 
+        my_feature = .x, 
+        my_outcome = "emd"
+      )
+  ) %>% 
+  reduce(.f = bind_rows)
+
+temp %>% 
+  pull(density_plot)
+
+temp %>% 
+  pull(correlation_scatterplot)
+
+
+```
+
+```{r}
+test_features <-
+  str_c("GMCSF_pSTAT5_")
+
+temp <-
+  map(
+    .x = test_features, 
+    .f = ~
+      explore_signaling_residuals(
+        my_cluster_type = "flowsom_surface", 
+        cluster_col = cluster_flowSOM_surface, 
+        my_feature = .x, 
+        my_outcome = "emd"
+      )
+  ) %>% 
+  reduce(.f = bind_rows)
+
+
+temp %>% 
+ pull(density_plot)
+
+
+```
+
+
+### Compare single-cell distributions that are highest (and lowest) for each feature
+
+```{r}
+my_cluster_type <- "ddpr_mahalanobis"
+
+highest_ddpr <- 
+  cancer_modeling_omnibus %>% 
+  filter(cluster_type == my_cluster_type) %>% 
+  select(-cluster_cols) %>% 
+  unnest() %>% 
+  group_by(feature) %>%
+  slice_max(order_by = ddpr, n = 1)
+
+highest_ddpr
+```
+
+
+
+
+
+## Do features extracted using different methods have different distributions?
+
+
+### Comparing to normal distribution
+
+We can compare the distributions of each extracted feature to the normal distribution. Not everything in data science has to be normally distributed, but it usually makes your life easier when it is. 
+
+
+```{r, warning = FALSE, method = FALSE}
+signaling_qq_plot <- function(signaling_tibble, clustering_method) {
+  
+  signaling_tibble %>% 
+    filter(cluster_type == clustering_method) %>% 
+    ggplot(aes(sample = values)) + 
+    geom_qq() + 
+    geom_qq_line() + 
+    facet_wrap(facets = vars(marker))+ 
+    labs(subtitle = clustering_method)
+}
+```
+
+```{r, warning = FALSE, method = FALSE}
+ddpr_signaling <-
+  extract_signaling_markers(feature_matrices = ddpr_features)
+
+map(
+  .x = unique(ddpr_signaling$cluster_type), 
+  .f = signaling_qq_plot, 
+  signaling_tibble = ddpr_signaling
+) %>% 
+  walk(.f = print)
+
+ddpr_signaling_log <- 
+  ddpr_signaling %>% 
+  mutate(values = log(values))
+
+map(
+  .x = unique(ddpr_signaling$cluster_type), 
+  .f = signaling_qq_plot, 
+  signaling_tibble = ddpr_signaling_log
+) %>% 
+  walk(.f = print)
+
+```
+
+```{r, warning = FALSE, message = FALSE}
+emd_signaling <- 
+  extract_signaling_markers(feature_matrices = emd_features)
+
+map(
+  .x = unique(emd_signaling$cluster_type), 
+  .f = signaling_qq_plot, 
+  signaling_tibble = emd_signaling
+) %>% 
+  walk(.f = print)
+
+emd_signaling_log <- 
+  emd_signaling %>% 
+  mutate(values = log(values))
+
+map(
+  .x = unique(emd_signaling$cluster_type), 
+  .f = signaling_qq_plot, 
+  signaling_tibble = emd_signaling_log
+) %>% 
+  walk(.f = print)
+```
+
+
+```{r, warning = FALSE, message = FALSE}
+js_signaling <- 
+  extract_signaling_markers(feature_matrices = js_features)
+
+map(
+  .x = unique(js_signaling$cluster_type), 
+  .f = signaling_qq_plot, 
+  signaling_tibble = js_signaling
+) %>% 
+  walk(.f = print)
+
+js_signaling_log <- 
+  js_signaling %>% 
+  mutate(values = log(values))
+
+map(
+  .x = unique(js_signaling$cluster_type), 
+  .f = signaling_qq_plot, 
+  signaling_tibble = js_signaling_log
+) %>% 
+  walk(.f = print)
+```
+
+## Looking at each marker by cluster
+
+```{r, warning = FALSE}
+
+cluster_qq_plot <- function(signaling_tibble, my_marker, my_cluster) { 
+  signaling_tibble %>% 
+  filter(cluster_type == my_cluster) %>% 
+  filter(marker == my_marker) %>% 
+  ggplot(aes(sample = values)) + 
+  geom_qq() + 
+  geom_qq_line() + 
+  facet_wrap(facets = vars(cell_type))+ 
+  labs(subtitle = my_marker)
+}
+
+stimulation_qq_plot <- function(signaling_tibble, my_marker, my_cluster) { 
+  signaling_tibble %>% 
+  filter(cluster_type == my_cluster) %>% 
+  filter(marker == my_marker) %>% 
+  ggplot(aes(sample = values)) + 
+  geom_qq() + 
+  geom_qq_line() + 
+  facet_wrap(facets = vars(stimulation))+ 
+  labs(subtitle = my_marker)
+}
+```
+
+ddpr extraction on mahalanobis clusters
+
+```{r, warning = FALSE}
+map(
+  .x = SIGNALING_MARKERS, 
+  .f = cluster_qq_plot, 
+  my_cluster = "ddpr_mahalanobis", 
+  signaling_tibble = ddpr_signaling
+) %>% 
+  walk(.f = print)
+```
+
+```{r, warning = FALSE}
+map(
+  .x = SIGNALING_MARKERS, 
+  .f = stimulation_qq_plot, 
+  my_cluster = "ddpr_mahalanobis", 
+  signaling_tibble = ddpr_signaling
+) %>% 
+  walk(.f = print)
+```
+
+emd extraction on mahalanobis clusters
+
+```{r, warning = FALSE}
+map(
+  .x = SIGNALING_MARKERS, 
+  .f = cluster_qq_plot, 
+  my_cluster = "ddpr_mahalanobis", 
+  signaling_tibble = emd_signaling
+) %>% 
+  walk(.f = print)
+
+```
+
+```{r, warning = FALSE}
+map(
+  .x = SIGNALING_MARKERS, 
+  .f = stimulation_qq_plot, 
+  my_cluster = "ddpr_mahalanobis", 
+  signaling_tibble = emd_signaling
+) %>% 
+  walk(.f = print)
+
+```
+
+
+js extraction on mahalanobis clusters
+
+```{r, warning = FALSE}
+map(
+  .x = SIGNALING_MARKERS, 
+  .f = cluster_qq_plot, 
+  my_cluster = "ddpr_mahalanobis", 
+  signaling_tibble = js_signaling
+) %>% 
+  walk(.f = print)
+```
+
+```{r, warning = FALSE}
+map(
+  .x = SIGNALING_MARKERS, 
+  .f = stimulation_qq_plot, 
+  my_cluster = "ddpr_mahalanobis", 
+  signaling_tibble = js_signaling
+) %>% 
+  walk(.f = print)
+```
+
+
+# compare js to ddpr features
+
+Next, we will compare the jensen-shannon index signaling features to the threshold-derived DDPR features. We'll start out by looking at the features derived using a single clustering method (developmental classifier), and then we'll do the same comparisons for other clustering methods. 
+
+```{r}
+# find the developmental clustering feature matrix that used the JS method
+js_features_mah <- 
+  js_features %>% 
+  dplyr::filter(cluster_type == "ddpr_mahalanobis") %>% 
+  unnest(features) %>% 
+  filter(condition != "healthy") %>% 
+  select(patient, condition, contains(paste(SIGNALING_MARKERS, sep = "|"))) %>% 
+  mutate(feature_type = "js") %>% 
+  left_join(
+    metadata, by = "patient"
+  )
+
+js_features_mah
+
+# find the developmental clustering feature matrix that used the DDPR method
+ddpr_features_mah <- 
+  ddpr_features %>% 
+  filter(cluster_type == "ddpr_mahalanobis", threshold == 10) %>% 
+  unnest(features) %>% 
+  select(-contains("prop"), -contains("Basal"), -threshold) %>% 
+  select(patient, condition, contains(paste(SIGNALING_MARKERS, sep = "|"))) %>% 
+  mutate(feature_type = "ddpr") %>% 
+  left_join(metadata, by = "patient")
+
+ddpr_features_mah
+
+```
+
+What columns are different between the js feature matrix and the ddpr feature matrix?
+
+```{r}
+setdiff(
+  colnames(js_features_mah),
+  colnames(ddpr_features_mah)
+)
+
+setdiff(
+  colnames(ddpr_features_mah), 
+  colnames(js_features_mah)
+)
+```
+
+Thus, we can see that the JS feature matrix includes the mean expression of each signaling feature in each cluster (across all stimulation conditions), whereas the ddpr feature matrix does not. We can simply remove those features when comparing the two feature matrices. 
+
+```{r}
+extra_features <- 
+  setdiff(colnames(js_features_mah), colnames(ddpr_features_mah))
+
+js_features_mah <- 
+  js_features_mah %>% 
+  select(-any_of(extra_features))
+```
+
+
+
+
+```{r, warning = FALSE, message = FALSE}
+combined_features <- 
+  ddpr_features_mah %>% 
+  bind_rows(js_features_mah) %>% 
+  pivot_longer(
+    cols = contains("@"), 
+    names_to = "feature", 
+    values_to = "value"
+  ) %>% 
+  separate(col = feature, into = c("stimulation", "marker", "cell_type")) 
+
+
+combined_features
+
+plot_signaling_feature <- function(my_marker) {
+  my_features <- 
+    combined_features %>% 
+    filter(marker == my_marker) %>%
+    group_by(feature_type) %>% 
+    mutate(value = scale(value)) %>% 
+    group_by(feature_type, patient, cell_type, stimulation) %>% 
+    summarize(value = mean(value, na.rm = TRUE))
+  
+  min_point <-quantile(my_features$value, probs = 0.01, na.rm = TRUE) #min(my_features$value, na.rm = TRUE)
+  max_point <- quantile(my_features$value, probs = 0.99, na.rm = TRUE)  #max(my_features$value, na.rm = TRUE)
+  range <- max_point - min_point 
+  
+  plot_1 <- 
+    my_features %>% 
+    ggplot(aes(x = value, y = stimulation, color = feature_type)) + 
+    geom_point(position = position_dodge(width = 1)) + 
+    scale_x_continuous(limits = c(min_point - 0.05 * range, max_point + 0.05 * range)) + 
+    facet_wrap(facets = vars(cell_type)) + 
+    labs(subtitle = my_marker)
+  
+  # not currently used
+  correlations <- 
+    my_features %>% 
+    pivot_wider(
+      names_from = feature_type, 
+      values_from = value
+    ) %>% 
+    group_by(cell_type) %>% 
+    summarize(correlation = cor(x = ddpr, y = js, use = "pairwise.complete.obs"))
+  
+  plot_2 <- 
+    my_features %>% 
+    pivot_wider(
+      names_from = feature_type, 
+      values_from = value
+    ) %>% 
+    ggplot(aes(x = ddpr, y = js, color = stimulation)) + 
+    geom_point() + 
+    scale_x_continuous(
+      limits = c(min_point - (0.02 * range), max_point + (0.02 * range))
+    ) + 
+    scale_y_continuous(
+      limits = c(min_point - (0.02 * range), max_point + (0.02 * range))
+    ) + 
+    facet_wrap(facets = vars(cell_type)) + 
+    labs(subtitle = my_marker)
+  
+  list(plot_1, plot_2)
+}
+
+js_mah_plots <- 
+  map(.x = SIGNALING_MARKERS, .f = plot_signaling_feature)
+
+walk(js_mah_plots, print)
+
+```
+
+```{r}
+combined_features %>% 
+  ggplot(aes(x = value, fill = condition)) + 
+  geom_density(alpha = 0.7) + 
+  facet_grid(rows = vars(feature_type), scales = "free")
+  
+```
+
+
+```{r}
+setdiff(
+  colnames(js_features_mah), 
+  colnames(ddpr_features_mah)
+)
+```
+
+
+# Manual investigation
+
+Choose some random patients (1-2) and compare their single-cell distributions for several markers (in several clusters). And then manually look to see which of our metrics seems to capture the relevant differences the most. 
+
+
+
+
+
+
+
+
