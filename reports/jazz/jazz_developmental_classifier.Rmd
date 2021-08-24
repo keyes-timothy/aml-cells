@@ -63,6 +63,7 @@ is_sampled <- TRUE
 jazz_path <- file.path("~", "Box", "Tim", "Lab", "Data", "jazz_data")
 healthy_path <- here::here("data-raw", "healthy_myeloid")
 out_path <- here::here("reports", "jazz", "figures")
+csv_path <- here::here("reports", "jazz", "out_data")
 
 source('~/GitHub/aml-cells/scripts/feature_extraction/feature_extraction_utils.R')
 
@@ -832,6 +833,154 @@ From the plot above, we can see that there are certain markers that are relative
 
 We can also see that several signaling markers (including `pCreb`, `pS6`, and `pSTAT5` seem to be **lower** in treatment-resistant cells than in non-resistant cells (at least in the basal state), suggesting that there might be some underlying signaling program differences between these two categories of cells.
 
+## 4. How do flowSOM metaclusters and developmental clusters relate to one another? 
+
+We can calculate the percentage of each flowSOM metacluster that is made up of cells in each developmental subpopulation: 
+
+```{r}
+jazz_data %>% 
+  count(cluster)
+```
+
+
+```{r, fig.height = 2}
+cluster_comparison_data <- 
+  jazz_data %>% 
+  rename(developmental_cluster = cluster) %>% 
+  filter(developmental_cluster != "Thrombocyte") %>% 
+  count(flowsom_metaclusters, developmental_cluster, .drop = FALSE) %>% 
+  group_by(flowsom_metaclusters) %>% 
+  summarize(
+    prop = n / sum(n), 
+    developmental_cluster = developmental_cluster
+  ) %>% 
+  mutate(percentage = prop * 100)
+
+
+
+
+cluster_comparison_data %>%  
+  ggplot(
+    aes(x = flowsom_metaclusters, y = percentage, fill = developmental_cluster)
+  ) + 
+  geom_col(position = "dodge") + 
+  #scale_x_discrete(labels = function(x) str_sub(x, end = 5L)) + 
+  scale_y_continuous(labels = scales::label_number(suffix = "%")) + 
+  #facet_grid(rows = vars(flowsom_metaclusters)) + 
+  theme(legend.position = "bottom") + 
+  labs(
+    x = "Flowsom metacluster ID", 
+    y = 
+      str_wrap(
+        "% of cells in each metacluster assigned to a developmental cluster",
+        width = 40
+      ), 
+    fill = NULL
+  )
+```
+
+
+```{r}
+percentage_plot <- 
+  cluster_comparison_data %>% 
+  ggplot(
+    aes(x = 1, y = percentage, fill = developmental_cluster)
+  ) + 
+  geom_col(position = "dodge") + 
+  #scale_x_discrete(labels = function(x) str_sub(x, end = 5L)) + 
+  scale_y_continuous(labels = scales::label_number(suffix = "%")) + 
+  scale_fill_tableau() + 
+  facet_wrap(facets = vars(flowsom_metaclusters)) + 
+  theme_bw() + 
+  theme(
+    legend.position = "bottom",
+    axis.text.x = element_blank(), 
+    axis.ticks.x = element_blank()
+  ) + 
+  labs(
+    x = "Flowsom metacluster ID", 
+    y = 
+      str_wrap(
+        "% of cells in each metacluster assigned to a developmental cluster",
+        width = 40
+      ), 
+    fill = NULL
+  )
+
+percentage_plot
+```
+
+Run metacluster centroids through the classifier: 
+
+```{r}
+softmax <- 
+  function(x) { 
+    exp(x) / sum(exp(x))
+  }
+
+norm <- 
+  function(x) { 
+    x / sum(x)
+  }
+
+
+metacluster_centroids <-
+  jazz_data %>% 
+  group_by(flowsom_metaclusters) %>% 
+  summarize(across(all_of(CLASSIFIER_MARKERS), mean))
+
+metacluster_centroid_classifications <- 
+  metacluster_centroids %>% 
+  group_by(flowsom_metaclusters) %>% 
+  tidytof:::tof_classifier_apply(
+    classifier_fit = classifier_fit, 
+    num_cores = 1, 
+    parallel_var = flowsom_metaclusters
+  )
+
+distance_plot <- 
+  metacluster_centroid_classifications %>% 
+  mutate(flowsom_metaclusters = metacluster_centroids$flowsom_metaclusters) %>%
+  pivot_longer(
+    cols = -c(flowsom_metaclusters, mahalanobis_cluster),
+    names_to = "distance", 
+    values_to = "value"
+  ) %>% 
+  group_by(flowsom_metaclusters) %>% 
+  mutate(
+    value = norm(value), 
+    distance = 
+      str_remove(distance, "mahalanobis_") %>% 
+      factor(levels = CLASSIFIER_POPULATIONS)
+  ) %>% 
+  ggplot(aes(x = 1, y = value, fill = distance)) + 
+  geom_col(position = "dodge") + 
+  ggthemes::scale_fill_tableau() + 
+  facet_wrap(facets = vars(flowsom_metaclusters)) + 
+  theme_bw() + 
+  theme(
+    axis.text.x = element_blank(), 
+    axis.ticks.x = element_blank(), 
+    legend.position = "bottom"
+  ) + 
+  labs(
+    x = NULL, 
+    y = 
+      str_wrap(
+        "Normalized distance from flowsom cluster centroid to mahalanobis cluster centroid", 
+        width = 40
+      ), 
+    fill = NULL
+  )
+  
+```
+```{r}
+
+```
+
+
+
+
 `r pagebreak()`
 
 # Differential discovery analysis
@@ -840,27 +989,27 @@ While the above exploratory visualizations are useful to get a sense of what is 
 
 Specifically, we use generalized linear mixed models (GLMMs) to test for differences in cluster abundance and cluster marker expression. The benefit of using mixed-models in this context is that, unlike more traditional differential abundance/expression testing tools commonly applied to CyTOF data like [CITRUS](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4084463/), GLMMs can account for complex experimental designs such as paired or block designs with known covariates representing batch effects or individual-to-individual variation. In the case of the present study, using random effects to model the variance in cluster abundance and marker expression that arises from random variation between individual patients and between wells in the treatment setup (i.e. sample-to-sample variation), we can more reliably detect differences attributable solely to the effect of Vyxeos treatment.
 
-To do this, we can use the `{diffcyt}` package (or manual fitting of a similar procedure) to test for differential abundance of clusters across timepoints using binomial regression. For each cluster, we can fit a binomial regression model in which we model the log-odds (and thus indirectly the proportion of cells in a given cluster) of each cluster in a given sample *i* and a given sample *j* $p_{ij}$ according to the following equation:
+To do this, we can use the `{diffcyt}` package (or manual fitting of a similar procedure) to test for differential abundance of clusters across timepoints using binomial regression. For each cluster, we can fit a binomial regression model in which we model the log-odds (and thus indirectly the proportion of cells in a given cluster) of each cluster in a given patient *i* and a given sample *j* $p_{ij}$ according to the following equation:
 
 $$
-logit(p_{ij}) = log(\frac{p_{ij}}{1 - p_{ij}}) = \beta_0 + \alpha_i^{(p)} + \alpha_j^{(s)} + \beta_1 X_{72hr_j} + \beta_{2} X_{96hr_j}
+logit(p_{ij}) = log(\frac{p_{ij}}{1 - p_{ij}}) = \beta_0 + \alpha_i^{(p)} + \alpha_j^{(s)} + \beta_1 X\_{72hr_j} + \beta\_{2} X_{96hr_j}
 $$
 
 In the equation above, we use the following definitions:
 
 -   $p_{ij}$: The proportion of cells in a given cluster in patient *i* and sample *j*
 -   $\alpha_i^{(p)}$: A random intercept for each patient *i* in which $\alpha_i^{(p)}$ \~ $N(0, \sigma_p)$, where $\sigma_p$ is estimated during model fitting.
--   $\alpha_j^{(s)}$: A random intercept for each sample *j* in which $\alpha_j^{(s)}$ \~ $N(0, \sigma_s)$, where $\sigma_s$ is estimated during model fitting. Note that the inclusion of this term allows us to model [observation-level random effects](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4194460/), which can be useful for modeling the overdispersion in count data commonly present in biology.
+-   $\alpha_j^{(s)}$: A random intercept for each sample *j* in which $\\alpha_j^{(s)}$ \~ $N(0, \sigma_s)$, where $\sigma_s$ is estimated during model fitting. Note that the inclusion of this term allows us to model [observation-level random effects](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC4194460/), which can be useful for modeling the overdispersion in count data commonly present in biology.
 -   $X_{72hr}$: an indicator variable representing whether or not a sample was taken from the 72hr timepoint (1 if yes, 0 otherwise).
 -   $X_{96hr}$:an indicator variable representing whether or not a sample was taken from the 96hr timepoint (1 if yes, 0 otherwise).
 -   All $\beta$'s are linear model parameters optimized during model fitting.
 
 Using the above setup, we can apply null-hypothesis significance testing to $\beta_1$ and $\beta_2$ (under the null hypothesis that $\beta_1 = \beta_2 = 0$): if either $\beta$ value is significantly different from 0 in the model, we can state that the proportion of cells in our cluster differs significantly between the 0hr timepoint and the 72hr or 96hr timepoints, respectively, while controlling for individual-to-individual and sample-to-sample variation.
 
-We can use a similar procedure to test for differences in mean marker expression across clusters by fitting a linear regression model (thus, an LMM, not a GLMM) for each cluster/marker pair. For this, we implicitly assume the that mean marker expression values in each cluster are distributed normally among patients (which is a large assumption even though this method is state-of-the-art in the CyTOF community). Thus, for differential marker expression, we use the following equation to predict the mean expression value $y_{ij}$ for a given cluster/marker pair in patient **i** and sample **j**:
+We can use a similar procedure to test for differences in mean marker expression across clusters by fitting a linear regression model (thus, an LMM, not a GLMM) for each cluster/marker pair. For this, we implicitly assume the that mean marker expression values in each cluster are distributed normally among patients (which is a large assumption even though this method is state-of-the-art in the CyTOF community). Thus, for differential marker expression, we use the following equation to predict the mean expression value $y\_{ij}$ for a given cluster/marker pair in patient **i** and sample **j**:
 
-$$
-y_{ij} = \beta_0 + \alpha_i^{(p)} + \beta_1 X_{72hr_j} + \beta_{2} X_{96hr_j}
+$$ 
+y_{ij} = \beta_0 + \alpha_i^{(p)} + \beta_1 X_{72hr_j} + \beta_{2} X_{96hr_j} 
 $$
 
 in which the values in this expression are defined as above and the null-hypothesis significance testing is carried out identically. Importantly, we can correct for multiple comparisons (due to the number of models being fit) by using the `p.adjust` function in base r (which has a variety of methods already implemented).
@@ -889,8 +1038,7 @@ my_markers <-
     "cd56", "pu1", "cd33", "pdl1", "cd14", 
     "caspase3", "cd38", "pstat3", "cd16", "cd68",
     "mpo", "ph2ax", "cd47", "cd135", "phh3",
-    "ps6", "cd49f", "hladr", "cd71", "pcreb",
-    "cd11b"   
+    "ps6", "cd49f", "hladr", "cd71", "pcreb", "cd11b"
   )
 
 marker_info <- 
@@ -1151,7 +1299,7 @@ sig_clusters_3 %>%
 
 ### Tim models GLMMs directly
 
-To see if the `diffcyt` GLMM implementation does anything differently than I would do it if I implemented the testing procedure from scratch, I provide a *de novo* implementation here. Note that I have to rely on the `{broomExtra}` package to do the null-hypothesis significance testing of the $\beta$ values for me.
+To see if the `diffcyt` GLMM implementation does anything differently than I would do it if I implemented the testing procedure from scratch, I provide a *de novo* implementation here. Note that I have to rely on the `{broomExtra}` package to do the null-hypothesis significance testing of the $\\beta$ values for me.
 
 ```{r}
 # count the number of cells in each cluster in each patient at each timepoint
@@ -1306,6 +1454,70 @@ And we can see that the significant clusters that we've identified are identical
 setdiff(sig_clusters_diffcyt, sig_clusters_tim)
 setdiff(sig_clusters_tim, sig_clusters_diffcyt)
 ```
+
+### Save differentially abundant clusters
+
+Other people might want to manually investigate the results from this analysis, so we save them below as a .csv. 
+
+```{r}
+raw_jazz_data <- 
+  jazz_path %>% 
+  tof_read_fcs() %>% 
+  mutate(
+    patient = 
+      str_extract(string = file_name, pattern = "_[:digit:]+") %>% 
+      str_remove("_") %>% 
+      replace_na("healthy"), 
+    timepoint = 
+      str_extract(string = file_name, pattern = "[:digit:]+hr") %>% 
+      replace_na("healthy")
+  ) %>% 
+  filter(patient != "healthy")
+
+raw_jazz_data <- 
+  raw_jazz_data %>% 
+  mutate(
+    flowsom_metacluster = jazz_data$flowsom_metaclusters, 
+    cluster_type = 
+      if_else(
+        flowsom_metacluster %in% sig_clusters_tim, 
+        "significant", 
+        "not significant"
+      )
+  ) %>% 
+  left_join(
+    inc_or_dec_tibble, 
+    by = c("flowsom_metacluster" = "flowsom_metaclusters")
+  ) %>% 
+  rename(cluster_increase_or_decrease = inc_or_dec) %>% 
+  mutate(
+    cluster_increase_or_decrease = 
+      replace_na(cluster_increase_or_decrease, "not significant")
+  )
+
+write_csv(
+  x = raw_jazz_data, 
+  file = file.path(csv_path, "output_jazz_data.csv")
+)
+
+nested_raw_jazz_data <- 
+  raw_jazz_data %>% 
+  group_by(file_name) %>% 
+  nest() %>% 
+  mutate(
+    file_name = 
+      str_replace(file_name, pattern = ".fcs", replacement = ".csv")
+  )
+
+map2(
+  .x = nested_raw_jazz_data$file_name, 
+  .y = nested_raw_jazz_data$data, 
+  .f = ~ write_csv(x = .y, file = file.path(csv_path, "ind_files", .x))
+)
+
+```
+
+
 
 ### Visualization of differentially abundant clusters
 
@@ -1575,7 +1787,7 @@ ds_results_2 %>%
 ```
 
 ```{r, include = FALSE}
-# number of significant difference by marker
+# number of significant differences by marker
 ds_results %>% 
   topTable(all = TRUE) %>% 
   as_tibble() %>% 

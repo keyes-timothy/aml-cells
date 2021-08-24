@@ -19,16 +19,12 @@ In this vignette, we read in and preprocess AML data from .fcs files. We also pr
 # Libraries
 libraries <- 
   c(
-    'flowCore', 
     'tidyverse',
     'readxl',
     'ggridges',
     'rlang',
     'ggthemes',
-    'DataExplorer',
-    'ComplexHeatmap',
     'foreach',
-    'parallel', 
     'tidytof'
   )
 
@@ -71,8 +67,78 @@ md %>%
 ### From scratch 
 
 ```{r raw-read-single-cell, read-raw-data, eval = FALSE}
-source(file.path(CODE_DIRECTORY, "io", "aml_read_data.R"))
+# read data from raw .fcs files
+aml_data_raw <- 
+  RAW_DATA_DIRECTORY %>% 
+  tof_read_data(sep = "_")
 ```
+
+
+```{r}
+# clean the column names and add columns encoding 
+# patient, condition, plate, and stimulation 
+# (as well as assigning each cell a cell_id)
+aml_data_raw <- 
+  aml_data_raw %>% 
+  mutate(
+    plate = 
+      str_extract(file_name, pattern = "Plate[:digit:]+") %>% 
+      str_to_lower(), 
+    patient = 
+      str_extract(file_name, pattern = "_([:alnum:]+)") %>% 
+      str_sub(start = 2L), 
+    stimulation = 
+      str_extract(file_name, pattern = "[:space:][[:alpha:][:digit:]]+_") %>% 
+      str_sub(start = 2L, end = -2L),
+    condition = 
+      str_extract(file_name, pattern = "(Dx)|(Rx)") %>%
+      replace_na(replace = "healthy") %>% 
+      str_to_lower()
+  ) %>%
+  select(
+    -Time_Time, 
+    -Event_length_Event_length, 
+    -contains("Pd", ignore.case = FALSE), 
+    -Center_Center, 
+    -Offset_Offset, 
+    -Width_Width, 
+    -Residual_Residual, 
+    -beadst_beadDist, 
+  ) %>% 
+  rename_with(
+    .fn =
+      function(x) {
+        if_else(
+          str_detect(x, "empty") | !str_detect(x, "_"),
+          x, 
+          str_extract(x, pattern = ".+_") %>% 
+            str_sub(end = -2L)
+        )
+      }
+  ) %>% 
+  rename(file_name = file) %>% 
+  mutate(cell_id = as.character(1:n()))
+```
+
+
+
+```{r}
+# write data to an .rds file
+aml_data_raw %>% 
+  write_rds(file = file.path(DATA_DIRECTORY, "aml_data_raw.rds"))
+```
+
+
+```{r}
+# write subsampled data to an .rds file
+aml_data_downsampled <- 
+  aml_data_raw %>% 
+  tof_downsample_prop(group_cols = file_name, prop_cells = 0.1)
+
+aml_data_downsampled %>% 
+  write_rds(file = file.path(DATA_DIRECTORY, "aml_data_raw_downsampled.rds"))
+```
+
 
 ### From .rds file
 
@@ -80,14 +146,12 @@ source(file.path(CODE_DIRECTORY, "io", "aml_read_data.R"))
 data_path <- 
   file.path(
     DATA_DIRECTORY, 
-    if_else(!is_sampled, "aml_data_raw.rds", "aml_data_raw_sampled.rds")
+    if_else(!is_sampled, "aml_data_raw.rds", "aml_data_raw_downsampled.rds")
   )
 
-aml_data <- 
+aml_data_raw <- 
   data_path %>% 
-  read_rds() %>% 
-  ungroup() %>% 
-  mutate(cell_id = as.character(1:n()))
+  read_rds() 
 ```
 
 
@@ -97,7 +161,11 @@ aml_data <-
 print(
   str_glue(
     "Patients in MD but not in single-cell data: \n {my_patients} \n",
-    my_patients = str_c(setdiff(md$patient,str_to_lower(aml_data$patient)), collapse = " ")
+    my_patients = 
+      str_c(
+        setdiff(md$patient, str_to_lower(aml_data_raw$patient)), 
+        collapse = " "
+      )
   )
 )
 
@@ -105,18 +173,21 @@ print(
 print(
   str_glue(
     "Patients in single-cell data but not in MD: \n {my_patients} \n",
-    my_patients = str_c(setdiff(str_to_lower(aml_data$patient), md$patient), collapse = " "), 
+    my_patients = 
+      str_c(
+        setdiff(str_to_lower(aml_data_raw$patient), md$patient), 
+        collapse = " "
+      ) 
   )
 )
 
 ```
 
-Thus, we can see that several patients in the single-cell data set have to be renamed
-in order to match the metadata. 
+Thus, we can see that several patients in the single-cell data set have to be renamed in order to match the metadata. 
 
 ```{r fix-patient-names}
 aml_data <- 
-  aml_data %>% 
+  aml_data_raw %>% 
   mutate(
     patient = 
       recode(patient, PASBEE = "pasbbe", PASTRP = "pasrtp") %>% 
@@ -131,7 +202,11 @@ And now we check the names again...
 print(
   str_glue(
     "Patients in MD but not in single-cell data: \n {my_patients} \n",
-    my_patients = str_c(setdiff(md$patient,str_to_lower(aml_data$patient)), collapse = " ")
+    my_patients = 
+      str_c(
+        setdiff(md$patient, str_to_lower(aml_data$patient)), 
+        collapse = " "
+      )
   )
 )
 
@@ -139,7 +214,11 @@ print(
 print(
   str_glue(
     "Patients in single-cell data but not in MD: \n {my_patients} \n",
-    my_patients = str_c(setdiff(str_to_lower(aml_data$patient), md$patient), collapse = " "), 
+    my_patients = 
+      str_c(
+        setdiff(str_to_lower(aml_data$patient), md$patient), 
+        collapse = " "
+      ) 
   )
 )
 ```
@@ -148,18 +227,22 @@ And we can see that there are some patients that included in the metadata that w
 
 ### Pre-process
 
-Using `tof_preprocess()`, we can easily preprocess the data using several different procedures. 
+Using the {tidytof} function `tof_preprocess()`, we can easily preprocess the data using several different procedures. 
 
 With arcsinh transformation and removal of added noise: 
 ```{r preprocess-1}
 aml_data_p <- 
   aml_data %>% 
   tof_preprocess()
+
+aml_data_downsampled_p <- 
+  aml_data_p %>% 
+  filter(cell_id %in% aml_data_downsampled$cell_id)
 ```
 
 With arcsinh transformation and removal of added noise, plus scaling/centering: 
 
-```{r preprocess-2}
+```{r preprocess-2, eval = FALSE, include = FALSE}
 ps_fun <- function(x) { 
   x %>% 
     {asinh(x = ./5)} %>% 
@@ -170,13 +253,24 @@ ps_fun <- function(x) {
 aml_data_ps <- 
   aml_data %>% 
   tof_preprocess(transform_fun = ps_fun)
+
+aml_data_downsampled_ps <- 
+  aml_data_ps %>% 
+  filter(cell_id %in% aml_data_downsampled$cell_id)
 ```
+
+
 
 With removal of added noise and rank transformation (similar to "cytoDx"):
 ```{r preprocess-3}
 aml_data_r <-
   aml_data %>%
   tof_preprocess(transform_fun = rank)
+
+aml_data_downsampled_r <- 
+  aml_data_r %>% 
+  mutate(cell_id = as.character(cell_id)) %>% 
+  filter(cell_id %in% aml_data_downsampled$cell_id)
 ```
 
 
@@ -184,109 +278,16 @@ We can then save our pre-processed data. In the saved files, 'p' indicates stand
 
 ```{r save-preprocessed-data}
 ls() %>% 
-  str_subset(pattern = "aml_data_.") %>% 
+  str_subset(pattern = "aml_data_(downsampled_)?(p|ps|r)$") %>% 
   walk(
-    .f = ~ get(.x) %>% 
-      write_rds(
-        path = 
-          file.path(
-            DATA_DIRECTORY, 
-            str_c(if_else(is_sampled, "sampled_", ""), .x, ".rds")
-          )
-      )
+    .f = ~ 
+      get(.x) %>% 
+      write_rds(file = file.path(DATA_DIRECTORY, str_c(.x, ".rds")))
   )
 ```
 
 
 ## Data quality and univariate distributions
-
-### Introduction to the data
-
-First, we use the `{{DataExplorer}}` package to get to know the data a bit. 
-
-```{r}
-plot_str(aml_data)
-```
-
-```{r}
-introduce(aml_data) %>% 
-  pivot_longer(
-    cols = everything(), 
-    names_to = "dataset_feature", 
-    values_to = "value"
-  ) %>% 
-  knitr::kable()
-```
-
-Number of cells across all discrete features: 
-
-```{r}
-discrete_bars <- 
-  plot_bar(aml_data, ggtheme = theme_bw(), nrow = 2L, ncol = 2L, parallel = TRUE) %>% 
-  `$`(page_1) + 
-  labs(y = "Number of cells")
-```
-
-Correlation matrix for all protein measurements: 
-
-```{r corr-matrix-euclidean}
-plot_channels <- 
-  aml_data_p %>%
-  summarize(across(one_of(ALL_MARKERS), mean)) %>% 
-  pivot_longer(cols = everything(), names_to = "channel", values_to = "mean") %>% 
-  arrange(desc(mean)) %>% 
-  pull(channel)
-
-aml_data_p %>% 
-  select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
-  cor() %>% 
-  Heatmap(
-    col = 
-      circlize::colorRamp2(
-        breaks = seq(-1, 1, 0.5), 
-        RColorBrewer::brewer.pal(n = 5, name = "RdBu")
-      ),
-    heatmap_legend_param = list(title = "Correlation"), 
-    width = unit(15, "cm"), 
-    height = unit(15, "cm")
-  )
-```
-
-```{r corr-matrix-pearson}
-aml_data_p %>% 
-  select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
-  cor() %>% 
-  Heatmap(
-    col = 
-      circlize::colorRamp2(
-        breaks = seq(-1, 1, 0.5), 
-        RColorBrewer::brewer.pal(n = 5, name = "RdBu")
-      ),    
-    clustering_distance_rows = "pearson", 
-    clustering_distance_columns = "pearson",
-    heatmap_legend_param = list(title = "Correlation"), 
-    width = unit(15, "cm"), 
-    height = unit(15, "cm")
-  )
-```
-
-```{r corr-matrix-manhattan}
-aml_data_p %>% 
-  select(one_of(plot_channels), -CD3_CD19, -`caspase-3`) %>% 
-  cor() %>% 
-  Heatmap(
-    col = 
-      circlize::colorRamp2(
-        breaks = seq(-1, 1, 0.5), 
-        RColorBrewer::brewer.pal(n = 5, name = "RdBu")
-      ),
-    clustering_distance_rows = "manhattan", 
-    clustering_distance_columns = "manhattan",
-    heatmap_legend_param = list(title = "Correlation"), 
-    width = unit(15, "cm"), 
-    height = unit(15, "cm")
-  )
-```
 
 ### By plate
 
@@ -294,8 +295,7 @@ aml_data_p %>%
 
 ```{r cell-number-plate}
 aml_data %>% 
-  count(plate) %>% 
-  arrange(desc(n)) %>% 
+  count(plate, sort = TRUE) %>% 
   knitr::kable()
 ```
 
@@ -319,56 +319,7 @@ aml_data %>%
 
 #### Univariate histograms
 
-```{r histograms-plate-plot, eval = FALSE}
-if (generate_histograms) {
-  aml_data_p %>% 
-    tof_plot_all_histograms(
-      group_var = plate, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"),  
-      label_suffix = "hist_by_plate.pdf", 
-      width = 6,
-      height = 10,
-      device = "pdf"
-    )
-  
-  aml_data_p %>% 
-    filter(condition == "healthy") %>% 
-    tof_plot_all_histograms(
-      group_var = plate, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p_healthy"), 
-      label_suffix = "hist_by_plate.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf"
-    )
-  
-  aml_data_ps %>% 
-    tof_plot_all_histograms(
-      group_var = plate, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
-      label_suffix = "hist_by_plate.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf"
-    )
-  
-  aml_data_ps %>% 
-    filter(condition == "healthy") %>% 
-    tof_plot_all_histograms(
-      group_var = plate, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps_healthy"), 
-      label_suffix = "hist_by_plate.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf"
-    )
-}
-
-```
+TO DO 
 
 #### By plate (comparing patients on more than one plate)
 
@@ -381,29 +332,29 @@ my_patients <-
   filter(n > 1) %>% 
   pull(patient)
 
-aml_data_p %>% 
-  filter(patient %in% my_patients) %>% 
-  mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
-  tof_histogram(channel_var = CD45, group_var = patient_plate, ordered = TRUE) + 
-  labs(y = NULL)
-
-aml_data_p %>% 
-  filter(patient %in% my_patients) %>% 
-  mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
-  tof_histogram(channel_var = pSTAT5, group_var = patient_plate, ordered = TRUE) + 
-  labs(y = NULL)
-
-aml_data_p %>% 
-  filter(patient %in% my_patients) %>% 
-  mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
-  tof_histogram(channel_var = CD34, group_var = patient_plate, ordered = TRUE) + 
-  labs(y = NULL)
-
-aml_data_p %>% 
-  filter(patient %in% my_patients) %>% 
-  mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
-  tof_histogram(channel_var = CD38, group_var = patient_plate, ordered = TRUE) + 
-  labs(y = NULL)
+# aml_data_p %>% 
+#   filter(patient %in% my_patients) %>% 
+#   mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
+#   tof_histogram(channel_var = CD45, group_var = patient_plate, ordered = TRUE) + 
+#   labs(y = NULL)
+# 
+# aml_data_p %>% 
+#   filter(patient %in% my_patients) %>% 
+#   mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
+#   tof_histogram(channel_var = pSTAT5, group_var = patient_plate, ordered = TRUE) + 
+#   labs(y = NULL)
+# 
+# aml_data_p %>% 
+#   filter(patient %in% my_patients) %>% 
+#   mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
+#   tof_histogram(channel_var = CD34, group_var = patient_plate, ordered = TRUE) + 
+#   labs(y = NULL)
+# 
+# aml_data_p %>% 
+#   filter(patient %in% my_patients) %>% 
+#   mutate(patient_plate = str_c(patient, plate, sep = "_")) %>% 
+#   tof_histogram(channel_var = CD38, group_var = patient_plate, ordered = TRUE) + 
+#   labs(y = NULL)
 ```
 
 
@@ -437,35 +388,8 @@ aml_data %>%
 ```
 
 #### Univariate histograms
-```{r histograms-patient, eval = FALSE}
-if (generate_histograms) { 
-  aml_data_p %>% 
-    tof_plot_all_histograms(
-      group_var = patient, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"), 
-      label_suffix = "hist_by_patient.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf",
-      ordered = TRUE
-    )
-  
-  
-  aml_data_ps %>% 
-    tof_plot_all_histograms(
-      group_var = patient, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
-      label_suffix = "hist_by_patient.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf", 
-      ordered = TRUE
-    )
-}
-```
 
+TO DO 
 
 ### By patient (comparing patients with both Dx and Rx)
 
@@ -479,56 +403,11 @@ aml_data %>%
 
 #### Univariate histograms
 
-```{r signaling-condition-density-plots, message = FALSE, warning = FALSE, eval = FALSE}
-SIGNALING_MARKERS %>% 
-  syms() %>% 
-  map(
-    ~ 
-      tof_histogram_2(
-        filter(aml_data_p, patient %in% PAIRED_PATIENTS), 
-        channel_var = !!., 
-        group_var = patient, 
-        split_var = condition, 
-        alpha = 0.5, 
-        panel_scaling = FALSE
-      ) + 
-      facet_grid(cols = vars(stimulation))
-  ) %>% 
-  walk(print)
-```
+TO DO 
 
 ### By stimulation (surface)
 
-```{r, warning = FALSE, message = FALSE}
-if (generate_histograms) { 
-  surface_plots <- 
-    SURFACE_MARKERS %>% 
-    syms() %>% 
-    map(
-      ~ 
-        tof_histogram_2(
-          aml_data_p, 
-          channel_var = !!., 
-          group_var = patient, 
-          split_var = stimulation, 
-          alpha = 0.5,
-          ordered = TRUE,
-          panel_scaling = FALSE
-        ) 
-    )
-  
-  surface_plots %>% 
-    walk(print)
-  
-}
-# legend <- surface_plots[[1]] %>% get_legend()
-# 
-# surface_plots[1:9] %>% 
-#   map(~ . + theme(legend.position = "none")) %>% 
-#   plot_grid(plotlist = ., align = "vh", ncol = 3) %>% 
-#   plot_grid(., legend, nrow = 1, rel_widths = c(3, 0.3))
-
-```
+TO DO 
 
 
 #### Cell counts
@@ -542,89 +421,9 @@ aml_data %>%
 
 #### Univariate histograms
 
-```{r}
-if (generate_histograms) {
-  
-  aml_data_p %>% 
-    tof_histogram(channel_var = CD45, group_var = stimulation, ordered = TRUE)
-  
-  aml_data_p %>% 
-    tof_plot_all_histograms(
-      group_var = stimulation, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p"), 
-      label_suffix = "hist_by_stim.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf",
-      ordered = TRUE
-    )
-  
-  aml_data_p %>% 
-    filter(condition == "healthy") %>% 
-    tof_plot_all_histograms(
-      group_var = stimulation, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "p"), 
-      label_prefix = str_c(if_else(is_sampled, "sampled_", ""), "aml_data_p_healthy"), 
-      label_suffix = "hist_by_stim.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf"
-    )
-  
-  aml_data_ps %>% 
-    tof_plot_all_histograms(
-      group_var = stimulation, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-      label_prefix =  str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps"), 
-      label_suffix = "hist_by_stim.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf", 
-      ordered = TRUE
-    )
-  
-  aml_data_ps %>% 
-    filter(condition == "healthy") %>% 
-    tof_plot_all_histograms(
-      group_var = stimulation, 
-      out_path = file.path(HISTOGRAM_OUTPUT, "ps"), 
-      label_prefix =  str_c(if_else(is_sampled, "sampled_", ""), "aml_data_ps_healthy"), 
-      label_suffix = "hist_by_stim.pdf", 
-      width = 6, 
-      height = 10,
-      device = "pdf"
-    )
-}
-```
-
-## Classifier 
-
-```{r}
-
-```
-
-## Clustering 
-
-## Feature extraction 
-
-## Modeling
-
-## Dimensionality reduction
-
-```{r, eval = FALSE}
-pca_recipe <- 
-  recipe(~., data = aml_data_p) %>% 
-  step_zv(all_numeric()) %>% 
-  step_normalize(all_numeric()) %>% 
-  step_pca(all_numeric(), num_comp = 5) 
-
-pca_prep <- prep(pca_recipe)
-
-pca_result <- juice(pca_prep)
+TO DO 
 
 
-```
 
 
 

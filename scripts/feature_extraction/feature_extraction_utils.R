@@ -2,8 +2,8 @@
 
 # tof_tibble must be a tibble of single-cell observations
 # cluster_col is the UQ name of the column defining the clusters
-extract_feature_proportion <- 
-  function(tof_tibble, cluster_col) { 
+tof_extract_proportion <- 
+  function(tof_tibble, cluster_col, group_cols) { 
     
     abundances <- 
       tof_tibble %>%
@@ -196,38 +196,40 @@ extract_feature_signaling_threshold <-
 
 # first, a quick helper function to help find the kernel density estimates for each single-cell distribution
 
-tof_find_density <- function(my_cells, ...) {
-  my_cells <- 
-    my_cells %>% 
-    purrr::pluck("values")
-  if (length(my_cells) < 2) { 
-    tibble()
-  } else {
-    density <- density(my_cells, ...)
-    tibble(value = density$x, weight = density$y)
+tof_find_density <- 
+  function(my_cells, ...) {
+    my_cells <- 
+      my_cells %>% 
+      purrr::pluck("values")
+    if (length(my_cells) < 2) { 
+      tibble()
+    } else {
+      density <- density(my_cells, ...)
+      tibble(value = density$x, weight = density$y)
+    }
   }
-}
 
 
 # Another helper functions for finding the EMD
 
-tof_find_emd <- function(basal_densities, other_densities) {
-  if (identical(basal_densities, tibble())) {
-    emd <- NA_real_
-  } else if (identical(other_densities, tibble())) {
-    emd <- NA_real_
-  } else {
-    emd <- 
-      quietly(emdist::emdw)(
-        A = basal_densities$value, 
-        wA = basal_densities$weight, 
-        B = other_densities$value, 
-        wB = other_densities$weight
-      ) %>% 
-      pluck("result")
+tof_find_emd <- 
+  function(basal_densities, other_densities) {
+    if (identical(basal_densities, tibble())) {
+      emd <- NA_real_
+    } else if (identical(other_densities, tibble())) {
+      emd <- NA_real_
+    } else {
+      emd <- 
+        quietly(emdist::emdw)(
+          A = basal_densities$value, 
+          wA = basal_densities$weight, 
+          B = other_densities$value, 
+          wB = other_densities$weight
+        ) %>% 
+        pluck("result")
+    }
+    emd
   }
-  emd
-}
 
 
 #
@@ -306,33 +308,34 @@ extract_feature_signaling_emd <-
 #
 #
 #first, a helper function to find the jensen-shannon index 
-tof_find_js <- function(basal_densities, other_densities) {
-  if (identical(basal_densities, tibble())) {
-    js_index <- NA_real_
-  } else if (identical(other_densities, tibble())) {
-    js_index <- NA_real_
-  } else {
+tof_find_js <- 
+  function(basal_densities, other_densities) {
+    if (identical(basal_densities, tibble())) {
+      js_index <- NA_real_
+    } else if (identical(other_densities, tibble())) {
+      js_index <- NA_real_
+    } else {
+      
+      # bin the kernel density estimates by rounding to the 2nd decimal place
+      basal_densities <- 
+        mutate(basal_densities, value = round(value, 2))
+      other_densities <- 
+        mutate(other_densities, value = round(value, 2))
+      
+      # there might be a smarter way to compute this 
+      js_index <- 
+        basal_densities %>% 
+        full_join(other_densities, by = "value") %>% 
+        drop_na() %>% 
+        select(-value) %>% 
+        as.matrix() %>% 
+        t() %>% 
+        quietly(philentropy::JSD)(test.na = FALSE) %>% 
+        pluck("result")
+    }
     
-    # bin the kernel density estimates by rounding to the 2nd decimal place
-    basal_densities <- 
-      mutate(basal_densities, value = round(value, 2))
-    other_densities <- 
-      mutate(other_densities, value = round(value, 2))
-    
-    # there might be a smarter way to compute this 
-    js_index <- 
-      basal_densities %>% 
-      full_join(other_densities, by = "value") %>% 
-      drop_na() %>% 
-      select(-value) %>% 
-      as.matrix() %>% 
-      t() %>% 
-      quietly(philentropy::JSD)(test.na = FALSE) %>% 
-      pluck("result")
+    js_index
   }
-  
-  js_index
-}
 
 
 

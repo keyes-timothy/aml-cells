@@ -36,7 +36,7 @@ CLUSTER_OUTPUT <- here::here("data", "cancer_data_clustered.rds")
 marker_setup()
 patient_setup()
 
-# Misc globals for running different parts of this vignette
+# Paths
 mah_dev_path <- here::here("data", "mahalanobis_dev_features_10.rds")
 cos_dev_path <- here::here("data", "cosine_dev_features_10.rds")
 mah_citrus_path <- here::here("data", "mahalanobis_citrus_features.rds")

@@ -1,0 +1,230 @@
+---
+title: "Disease-specific CyTOF Analysis"
+author: tkeyes
+date: "`r Sys.Date()`"
+output: 
+  github_document:
+    toc: true
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, dpi = 300)
+```
+
+```{r message=FALSE, warning=FALSE}
+# Libraries
+libraries <- 
+  c(
+    "tidyverse", 
+    "tidymodels", 
+    "rlang", 
+    "ggthemes", 
+    "doParallel", 
+    "vip", 
+    "tidytof"
+  )
+
+source(here::here("scripts", "setup", "aml_utils.R"))
+source(here::here("scripts", "setup", "disease_specific_utils.R")) 
+
+call_libraries(libraries)
+
+# Parameters
+set_global_variables(locale = "galaxia")
+is_sampled <- TRUE
+if (is_sampled) { 
+  input_path <- here::here("data", "aml_data_clustered_sampled.rds")
+} else { 
+  input_path <- here::here("data", "aml_data_clustered.rds")
+}
+
+# set up aml marker and patient information
+marker_setup()
+patient_setup()
+
+
+```
+
+# Background
+
+
+
+
+# Read in data
+
+```{r}
+aml_data <- 
+  input_path %>% 
+  read_rds()
+
+aml_data
+```
+```{r}
+colnames(aml_data)
+```
+
+
+
+```{r}
+aml_sampled <- 
+  aml_data %>% 
+  group_by(patient) %>% 
+  slice_sample(prop = 0.01) %>% 
+  ungroup()
+
+aml_sampled
+```
+
+
+# Fit linear models (everything together)
+
+Find the healthy subspace
+
+```{r}
+# save these columns for later
+healthy_colnames <- keep(ALL_MARKERS, ~ .x != "CD3_CD19")
+
+# all healthy cells together
+healthy_pcs <- 
+  aml_data %>% 
+  filter(condition == "healthy") %>% 
+  select(any_of(healthy_colnames)) %>% 
+  aml_find_healthy_subspace(
+    cluster_col = NULL, 
+    pca_threshold = 0.99
+  )
+
+# mahalanobis cell types separately
+healthy_pcs_by_cluster <- 
+  aml_data %>% 
+  filter(condition == "healthy") %>% 
+  select(any_of(healthy_colnames), mahalanobis_cluster) %>% 
+  aml_find_healthy_subspace(
+    cluster_col = mahalanobis_cluster, 
+    pca_threshold = 0.95
+  )
+
+# print results
+healthy_pcs %>%
+  as_tibble(rownames = "antigen")
+
+healthy_pcs_by_cluster
+```
+
+project all cells onto the healthy subspace
+
+```{r}
+# all healthy cells together
+aml_decomposed <- 
+  aml_project_onto_healthy(
+    aml_data = aml_sampled, 
+    healthy_pcs = healthy_pcs
+  )
+
+# mahalanobis cell types separately
+aml_decomposed_by_cluster <- 
+  aml_project_onto_healthy(
+    aml_data = aml_sampled, 
+    healthy_pcs = healthy_pcs_by_cluster, 
+    cluster_col = mahalanobis_cluster
+  )
+ 
+
+```
+
+```{r}
+aml_sampled
+
+aml_decomposed
+```
+
+```{r}
+aml_sampled
+
+aml_decomposed_by_cluster
+```
+
+
+combine new features with old features in `aml_sampled`
+
+```{r}
+aml_sampled <- 
+  aml_sampled %>% 
+  bind_cols(healthy_component, disease_component)
+
+aml_sampled %>% 
+  colnames()
+```
+
+compare healthy and diseased components in each channel across samples types
+
+```{r, warning = FALSE, message = FALSE}
+univariate_plot <- function(marker_regex) { 
+  hist_data <- 
+    aml_sampled %>% 
+    mutate(
+      condition = fct_recode(condition, "cancer" = "dx", "cancer" = "rx")
+    ) %>% 
+    select(condition, contains(marker_regex)) %>% 
+    pivot_longer(
+      cols = -condition, 
+      names_to = c('marker', 'component'), 
+      values_to = "value", 
+      names_sep = "_"
+    ) 
+  
+  hist_medians <- 
+    hist_data %>% 
+    group_by(component, condition) %>% 
+    summarize(value = median(value))
+  
+  hist_data %>% 
+    ggplot(aes(x = value, fill = condition)) + 
+    geom_vline(
+      aes(xintercept = value, color = condition), 
+      data = hist_medians
+    ) + 
+    geom_density(alpha = 0.4) + 
+    facet_grid(rows = vars(component)) + 
+    labs(subtitle = str_remove(marker_regex, "_"))
+}
+
+univariate_plot("CD45_")
+
+univariate_plot("CD34_")
+
+univariate_plot("CD38_")
+
+univariate_plot("CD34_")
+
+univariate_plot("CD56_")
+
+univariate_plot("HLA-DR_")
+
+
+map(str_c(healthy_colnames, "_"), univariate_plot)
+
+
+```
+
+
+# build all-cell model with only classifier markers
+
+
+
+
+# build all-cell model with only signaling markers
+
+
+
+# build a separate linear model for each cell type
+
+```{r}
+
+```
+
+
+
+
+

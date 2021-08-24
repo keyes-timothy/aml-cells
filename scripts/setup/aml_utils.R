@@ -4,7 +4,7 @@
 ### helper functions. 
 
 # Author: Timothy Keyes
-# Version: 2020-06-11
+# Version: 2021-07-11
 
 #### call_libraries ####
 # Description: A function to load and attach all libraries for an analysis. 
@@ -222,23 +222,6 @@ patient_setup <- function(){
     )
 }
 
-#### source_tidyTOF.R ####
-# Description: A function to source all prototype tidyTOF functions. 
-#
-# Inputs: 
-#     - tidyTOF_directory = file path to the tidyTOF folder on your machine.
-#
-# Outputs: None
-#
-# Side-effects: All tidyTOF experimental functions are sourced into the currently active session.
-source_tidyTOF <- function(tidyTOF_directory) {
-  my_files <-
-    list.files(tidyTOF_directory, pattern = "tof.+\\.R$", full.names = TRUE)
-  
-  for (file in my_files) { 
-    source(file)
-  }
-}
 
 #### load_cancer_data() ####
 # Description: A function to load data for the aml project
@@ -1060,9 +1043,7 @@ explore_signaling_residuals <-
       correlation_scatterplot = list(correlation_scatterplot), 
       density_plot = list(density_plot)
     )
-  
   return(final_result)
-  
 }
 
 
