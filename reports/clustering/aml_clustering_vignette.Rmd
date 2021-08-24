@@ -57,13 +57,12 @@ ALL_CLASSIFIER_MARKERS <-
 CLUSTER_OUTPUT <- 
   here::here("data", "aml_data_clustered.rds")
 
-
 # set up aml marker and patient information
 marker_setup()
 patient_setup()
 
 # globals for running different parts of this vignette
-is_sampled <- TRUE
+is_sampled <- FALSE
 
 # paths 
 healthy_myeloid_path <- here::here("data-raw", "healthy_myeloid")
