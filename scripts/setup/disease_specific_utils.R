@@ -77,7 +77,6 @@ aml_find_healthy_subspace <-
 
 # will return the cell_matrix such that the column names correspond to each 
 # cell's cell_id in the original input tibble.
-
 cell_matrix_transformation <- function(cell_matrix) {
   result <- 
     cell_matrix %>% 
@@ -89,7 +88,6 @@ cell_matrix_transformation <- function(cell_matrix) {
   return(result)
 }
 
-#project_cell_matrix <- function(cell_matrix, healthy_pcs)
 
 #' Project single-cell measurements onto a PCA-defined healthy subspace
 #'
@@ -139,7 +137,7 @@ aml_project_onto_healthy <-
       group_by({{cluster_col}}) %>% 
       nest() %>% 
       rename(cell_matrix = data) %>% 
-      mutate(cell_matrix = map(cell_matrix, cell_matrix_transformation))
+      mutate(cell_matrix = map(.x = cell_matrix, .f = cell_matrix_transformation))
     
     # combine cell_matrices and healthy_pcs
     

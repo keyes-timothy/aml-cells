@@ -266,7 +266,7 @@ healthy_myeloid_data %>%
 
 # Phenograph
 
-```{r}
+```{r, eval = FALSE}
 
 aml_data_nested <- 
   aml_data %>% 
@@ -278,7 +278,7 @@ aml_data_nested <-
 head(aml_data_nested)
 ```
 
-```{r}
+```{r, eval = FALSE}
 temp <- 
   aml_data_nested %>% 
   slice_head(n = 2L) %>% 
@@ -289,7 +289,6 @@ temp <-
         .f = tof_cluster_phenograph, 
         cluster_cols = any_of(SURFACE_MARKERS)
       )
-  )
 
 temp %>% 
   mutate(num_cells = map_int(data, nrow)) %>%
@@ -344,8 +343,8 @@ print(Sys.time() - start)
 
 # FlowSOM
 
-```{r}
-# clustering with surface markers 
+```{r flow-clustering}
+message("clustering with surface markers")
 flowsom_cluster_surface <- 
   aml_data %>% 
   tof_cluster_flowsom(
@@ -357,24 +356,24 @@ flowsom_metacluster_surface <-
   aml_data %>% 
   tof_cluster_flowsom(cluster_cols = any_of(SURFACE_MARKERS))
 
-# clustering using mahalanobis distances as input to flowsom
+message("clustering using mahalanobis distances as input to flowsom")
 flowsom_mahalanobis_clusters <- 
   mahalanobis_clusters %>%
   select(-mahalanobis_cluster) %>% 
   tof_cluster_flowsom(cluster_cols = everything())
 
-# clustering with cosine distances
+message("clustering using cosine distances as input to flowsom")
 flowsom_cosine_clusters <- 
   cosine_clusters %>%
   select(-cosine_cluster) %>% 
   tof_cluster_flowsom(cluster_cols = everything())
 
-# clustering with signaling markers
+message("clustering using signaling markers")
 flowsom_signaling_clusters <- 
   aml_data %>% 
   tof_cluster_flowsom(cluster_cols = any_of(SIGNALING_MARKERS))
 
-# clustering with all markers
+message("clustering using all markers")
 flowsom_all_marker_clusters <- 
   aml_data %>% 
   tof_cluster_flowsom(cluster_cols = any_of(ALL_MARKERS))
@@ -382,17 +381,17 @@ flowsom_all_marker_clusters <-
 ```
 
 Adding clusters to master feature matrices and saving
-```{r}
+```{r saving-results}
 aml_data_clustered <- 
   aml_data %>% 
   mutate(
-    flowsom_cluster_surface = flowsom_cluster_surface, 
-    flowsom_metacluster_surface = flowsom_metacluster_surface, 
-    flowsom_cluster_signaling = flowsom_signaling_clusters, 
-    flowsom_cluster_mahalanobis = flowsom_mahalanobis_clusters, 
-    flowsom_cluster_cosine = flowsom_cosine_clusters, 
+    flowsom_cluster_surface = flowsom_cluster_surface,
+    flowsom_metacluster_surface = flowsom_metacluster_surface,
+    flowsom_cluster_signaling = flowsom_signaling_clusters,
+    flowsom_cluster_mahalanobis = flowsom_mahalanobis_clusters,
+    flowsom_cluster_cosine = flowsom_cosine_clusters,
     flowsom_cluster_all_markers = flowsom_all_marker_clusters
-  ) %>% 
+  ) %>%
   bind_cols(mahalanobis_clusters) %>% 
   bind_cols(cosine_clusters) %>% 
   bind_cols(pearson_clusters)

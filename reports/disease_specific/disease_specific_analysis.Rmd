@@ -21,7 +21,6 @@ libraries <-
     "rlang", 
     "ggthemes", 
     "doParallel", 
-    "vip", 
     "tidytof"
   )
 
@@ -32,12 +31,14 @@ call_libraries(libraries)
 
 # Parameters
 set_global_variables(locale = "galaxia")
-is_sampled <- TRUE
+is_sampled <- FALSE
 if (is_sampled) { 
   input_path <- here::here("data", "aml_data_clustered_sampled.rds")
 } else { 
   input_path <- here::here("data", "aml_data_clustered.rds")
 }
+projection_path <- here::here("data", "aml_decomposed.rds")
+projection_by_cluster_path <- here::here("data", "aml_decomposed_by_cluster.rds")
 
 # set up aml marker and patient information
 marker_setup()
@@ -49,6 +50,12 @@ patient_setup()
 # Background
 
 
+```{r}
+knitr::include_graphics(
+  path = 
+    "/Users/tkeyes/GitHub/aml-cells/reports/disease_specific/background_images/dsga_schema.jpeg"
+)
+```
 
 
 # Read in data
@@ -58,26 +65,38 @@ aml_data <-
   input_path %>% 
   read_rds()
 
-aml_data
-```
-```{r}
-colnames(aml_data)
+aml_data %>% 
+  head()
 ```
 
-
-
 ```{r}
+if (file.exists(projection_path)) { 
+  aml_decomposed <- 
+    projection_path %>% 
+    read_rds()
+}
+
+if (file.exists(projection_by_cluster_path)) { 
+  aml_decomposed_by_cluster <- 
+    projection_by_cluster_path %>% 
+    read_rds()
+}
+```
+
+
+
+```{r, eval = FALSE}
 aml_sampled <- 
   aml_data %>% 
   group_by(patient) %>% 
-  slice_sample(prop = 0.01) %>% 
+  slice_sample(prop = 0.05) %>% 
   ungroup()
 
 aml_sampled
 ```
 
 
-# Fit linear models (everything together)
+# Fit linear models
 
 Find the healthy subspace
 
@@ -86,16 +105,18 @@ Find the healthy subspace
 healthy_colnames <- keep(ALL_MARKERS, ~ .x != "CD3_CD19")
 
 # all healthy cells together
+# about 5 minutes on all aml data 
 healthy_pcs <- 
   aml_data %>% 
   filter(condition == "healthy") %>% 
   select(any_of(healthy_colnames)) %>% 
   aml_find_healthy_subspace(
     cluster_col = NULL, 
-    pca_threshold = 0.99
+    pca_threshold = 0.95
   )
 
 # mahalanobis cell types separately
+# about 4 minutes on all aml data 
 healthy_pcs_by_cluster <- 
   aml_data %>% 
   filter(condition == "healthy") %>% 
@@ -112,20 +133,55 @@ healthy_pcs %>%
 healthy_pcs_by_cluster
 ```
 
-project all cells onto the healthy subspace
+visualize number of pcs (number of "eigencells") in the data overall vs. 
+in each cell type
+
+```{r}
+eigencell_tibble <- 
+  healthy_pcs_by_cluster %>% 
+  mutate(num_pcs = map_int(pcs, .f = ncol)) %>% 
+  select(mahalanobis_cluster, num_pcs) %>% 
+  bind_rows(
+    tibble(mahalanobis_cluster = "Overall", num_pcs = ncol(healthy_pcs))
+  ) %>% 
+  ungroup() %>% 
+  mutate(
+    color = as.factor(if_else(mahalanobis_cluster == "Overall", 0, 1)), 
+    mahalanobis_cluster = fct_reorder(mahalanobis_cluster, num_pcs)
+  )
+
+eigencell_tibble
+
+eigencell_tibble %>% 
+  arrange(num_pcs) %>% 
+  ggplot(aes(x = num_pcs, y = mahalanobis_cluster, fill = color)) + 
+  geom_col() +
+  scale_fill_manual(values = c("292929", "#c52018")) + 
+  labs(
+    x = "Number of Eigencells needed to preserve 95% of variance", 
+    y = NULL, 
+    fill = NULL
+  ) + 
+  theme_bw() + 
+  theme(legend.position = "none")
+```
+
+Project all cells onto the healthy subspace
 
 ```{r}
 # all healthy cells together
+# takes about 15 minutes on all aml data
 aml_decomposed <- 
   aml_project_onto_healthy(
-    aml_data = aml_sampled, 
+    aml_data = aml_data, 
     healthy_pcs = healthy_pcs
   )
 
 # mahalanobis cell types separately
+# takes about 11 minutes on all aml data
 aml_decomposed_by_cluster <- 
   aml_project_onto_healthy(
-    aml_data = aml_sampled, 
+    aml_data = aml_data, 
     healthy_pcs = healthy_pcs_by_cluster, 
     cluster_col = mahalanobis_cluster
   )
@@ -133,46 +189,71 @@ aml_decomposed_by_cluster <-
 
 ```
 
-```{r}
-aml_sampled
+Store projections to save computational time later
 
-aml_decomposed
+```{r}
+write_rds(
+  x = aml_decomposed, 
+  file = 
+    here::here("data", "aml_decomposed.rds") %>% 
+    if_else(
+      is_sampled, 
+      true = str_replace(string = ., pattern = ".rds", replacement = "_sampled.rds"), 
+      false = .
+    )
+)
+
+write_rds(
+  x = aml_decomposed_by_cluster, 
+  file = 
+    here::here("data", "aml_decomposed_by_cluster.rds") %>% 
+    if_else(
+      is_sampled, 
+      true = str_replace(string = ., pattern = ".rds", replacement = "_sampled.rds"), 
+      false = .
+    )
+)
+
+```
+
+
+
+```{r}
+aml_data %>% 
+  head()
+
+aml_decomposed %>% 
+  head()
 ```
 
 ```{r}
-aml_sampled
+aml_data %>% 
+  head()
 
-aml_decomposed_by_cluster
+aml_decomposed_by_cluster %>% 
+  head()
 ```
 
 
-combine new features with old features in `aml_sampled`
-
-```{r}
-aml_sampled <- 
-  aml_sampled %>% 
-  bind_cols(healthy_component, disease_component)
-
-aml_sampled %>% 
-  colnames()
-```
 
 compare healthy and diseased components in each channel across samples types
 
 ```{r, warning = FALSE, message = FALSE}
-univariate_plot <- function(marker_regex) { 
+univariate_plot <- function(aml_dataset, projection, marker_regex) { 
   hist_data <- 
-    aml_sampled %>% 
+    aml_dataset %>% 
+    select(condition) %>% 
+    bind_cols(projection) %>% 
     mutate(
       condition = fct_recode(condition, "cancer" = "dx", "cancer" = "rx")
-    ) %>% 
+    ) %>%
     select(condition, contains(marker_regex)) %>% 
     pivot_longer(
       cols = -condition, 
       names_to = c('marker', 'component'), 
       values_to = "value", 
       names_sep = "_"
-    ) 
+    )
   
   hist_medians <- 
     hist_data %>% 
@@ -189,40 +270,253 @@ univariate_plot <- function(marker_regex) {
     facet_grid(rows = vars(component)) + 
     labs(subtitle = str_remove(marker_regex, "_"))
 }
+```
 
-univariate_plot("CD45_")
+```{r}
 
-univariate_plot("CD34_")
+cd45_plot_overall <- 
+  univariate_plot(aml_data, aml_decomposed, "CD45_")
 
-univariate_plot("CD38_")
+cd45_plot_cluster <- 
+  univariate_plot(aml_data, aml_decomposed_by_cluster, "CD45_")
 
-univariate_plot("CD34_")
+cd45_plot_overall %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "cd45_overall.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
 
-univariate_plot("CD56_")
+cd45_plot_cluster %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "cd45_cluster.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
 
-univariate_plot("HLA-DR_")
+```
 
 
-map(str_c(healthy_colnames, "_"), univariate_plot)
+```{r}
+cd34_plot_overall <- 
+  univariate_plot(aml_data, aml_decomposed, "CD34_")
+
+cd34_plot_cluster <- 
+  univariate_plot(aml_data, aml_decomposed_by_cluster, "CD34_")
+
+cd34_plot_overall %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "cd34_overall.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
+
+cd34_plot_cluster %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "cd34_cluster.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
+```
+
+
+```{r}
+
+cd38_plot_overall <- 
+  univariate_plot(aml_data, aml_decomposed, "CD38_")
+
+cd38_plot_cluster <- 
+  univariate_plot(aml_data, aml_decomposed_by_cluster, "CD38_")
+
+cd38_plot_overall %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "cd38_overall.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
+
+cd38_plot_cluster %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "cd38_cluster.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
+
+```
+
+
+```{r}
+cd56_plot_overall <- 
+  univariate_plot(aml_data, aml_decomposed, "CD56_")
+
+cd56_plot_cluster <- 
+  univariate_plot(aml_data, aml_decomposed_by_cluster, "CD56_")
+
+cd56_plot_overall %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "cd56_overall.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
+
+cd56_plot_cluster %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "cd56_cluster.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
+
+```
+
+```{r}
+hladr_plot_overall <- 
+  univariate_plot(aml_data, aml_decomposed, "HLA-DR_")
+
+hladr_plot_cluster <- 
+  univariate_plot(aml_data, aml_decomposed_by_cluster, "HLA-DR_")
+
+hladr_plot_overall %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "HLA-DR_overall.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
+
+hladr_plot_cluster %>% 
+  ggsave(
+    filename = 
+      here::here("reports", "disease_specific", "histograms", "HLA-DR_cluster.pdf"),
+    plot = ., 
+    device = "pdf", 
+    width = 5, 
+    height = 4
+  )
+
+```
+
+```{r}
+
+save_histograms <- function(channel_regex) { 
+  plot_overall <- 
+    univariate_plot(aml_data, aml_decomposed, channel_regex)
+  
+  plot_cluster <- 
+    univariate_plot(aml_data, aml_decomposed_by_cluster, channel_regex)
+  
+  plot_overall %>% 
+    ggsave(
+      filename = 
+        here::here(
+          "reports", 
+          "disease_specific", 
+          "histograms", 
+          str_c(channel_regex, "overall.pdf")
+        ),
+      plot = ., 
+      device = "pdf", 
+      width = 5, 
+      height = 4
+    )
+  
+  plot_cluster %>% 
+    ggsave(
+      filename = 
+        here::here(
+          "reports", 
+          "disease_specific", 
+          "histograms", 
+          str_c(channel_regex, "cluster.pdf")
+        ),
+      plot = ., 
+      device = "pdf", 
+      width = 5, 
+      height = 4
+    )
+}
+  
+
+
+walk(.x = str_c(healthy_colnames, "_")[1:2], .f = save_histograms)
 
 
 ```
 
 
-# build all-cell model with only classifier markers
+summarize healthy and disease components for each condition (medians)
+
+```{r}
+summary_data <- 
+    aml_data %>% 
+    select(condition) %>% 
+    bind_cols(aml_decomposed) %>% 
+    mutate(
+      condition = fct_recode(condition, "cancer" = "dx", "cancer" = "rx")
+    ) %>%
+    select(condition, ends_with("_healthy"), ends_with("_disease")) %>% 
+    pivot_longer(
+      cols = -condition, 
+      names_to = c('marker', 'component'), 
+      values_to = "value", 
+      names_sep = "_"
+    )
+
+head(summary_data)
+  
+```
+  hist_medians <- 
+    hist_data %>% 
+    group_by(component, condition) %>% 
+    summarize(value = median(value))
+```
 
 
-
-
-# build all-cell model with only signaling markers
-
-
-
-# build a separate linear model for each cell type
+# perform projection with only classifier markers
 
 ```{r}
 
 ```
+
+
+
+
+# perform projection with only signaling markers
+
+```{r}
+
+```
+
+
+# perform projection using only mahalanobis distances themselves
+
+
+
 
 
 
